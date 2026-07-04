@@ -1,0 +1,4489 @@
+=== PROJECT TREE ===
+
+├── client
+│   ├── index.html
+│   └── src
+│       ├── App.jsx
+│       ├── components
+│       │   ├── ExportDoneModal.jsx
+│       │   ├── FFmpegPanel.jsx
+│       │   ├── FloatingControls.jsx
+│       │   ├── MasterCanvas.jsx
+│       │   ├── SceneRenderer.jsx
+│       │   └── Toolbar.jsx
+│       ├── engine
+│       │   ├── audioManager.js
+│       │   ├── configParser.js
+│       │   ├── constants.js
+│       │   ├── frameExporter.js
+│       │   └── mathUtils.js
+│       ├── main.jsx
+│       ├── renderers
+│       │   ├── EraserRenderer.jsx
+│       │   ├── HeadingRenderer.jsx
+│       │   ├── ImageRenderer.jsx
+│       │   ├── ParagraphRenderer.jsx
+│       │   ├── textAnimationUtils.js
+│       │   └── UnderlineRenderer.jsx
+│       └── styles
+│           └── master.css
+├── package.json
+├── project_snapshot.txt
+├── server
+│   ├── audio-script.json
+│   ├── generate-audio.js
+│   └── list-voices.js
+├── utility
+│   └── snapshot.js
+└── vite.config.js
+
+
+=== FILE CONTENTS ===
+########################################################
+
+  \client\index.html  
+########################################################
+        <!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Declarative Whiteboard Animation Suite</title>
+
+    <!-- Google Fonts — Handwriting & Teaching collection -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Kalam:wght@300;400;700&family=Caveat:wght@400;600;700&family=Patrick+Hand&family=Architects+Daughter&family=Delius&family=Fredoka:wght@400;600;700&family=Comfortaa:wght@400;600;700&family=Shadows+Into+Light&family=Amatic+SC:wght@400;700&family=Permanent+Marker&family=Indie+Flower&family=Just+Another+Hand&family=Rock+Salt&family=Quicksand:wght@400;600;700&family=Pangolin&display=swap"
+      rel="stylesheet"
+    />
+
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        background: #0f0f0f;
+        color: #e0e0e0;
+        font-family: 'Kalam', cursive, sans-serif;
+        overflow: hidden; /* full-screen app shell */
+      }
+      #root { width: 100%; height: 100vh; display: flex; flex-direction: column; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+########################################################
+
+  \client\src\App.jsx  
+########################################################
+        import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from 'react';
+
+import { parseConfig, applyAudioDurations } from './engine/configParser.js';
+import { AudioManager }  from './engine/audioManager.js';
+import { runExport }     from './engine/frameExporter.js';
+
+import MasterCanvas      from './components/MasterCanvas.jsx';
+import FloatingControls  from './components/FloatingControls.jsx';
+import ExportDoneModal   from './components/ExportDoneModal.jsx';
+
+// ── Import master.css ────────────────────────────────────────────────────────
+import './styles/master.css';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// APP
+// ─────────────────────────────────────────────────────────────────────────────
+export default function App() {
+
+  // ── Config loading ────────────────────────────────────────────────────────
+  // scene.html is loaded at runtime via fetch so users can edit it freely.
+  // Falls back to an empty scene on load error.
+  const [configHtml,  setConfigHtml]  = useState('');
+  const [configReady, setConfigReady] = useState(false);
+
+  useEffect(() => {
+    fetch('/config/scene.html')
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.text();
+      })
+      .then((html) => {
+        setConfigHtml(html);
+        setConfigReady(true);
+      })
+      .catch((err) => {
+        console.warn('[App] Could not load /config/scene.html:', err.message);
+        setConfigHtml('<div data-sceneid="01"><p data-timelinesequenceid="01" class="absolute top-400 left-200 text-4xl font-kalam text-gray">Add your scene config to client/public/config/scene.html</p></div>');
+        setConfigReady(true);
+      });
+  }, []);
+
+  // ── Scene graph ───────────────────────────────────────────────────────────
+  const [parsedData, setParsedData] = useState({ scenes: [], totalDuration: 0 });
+  const { scenes, totalDuration }   = parsedData;
+
+  // Refs so the RAF loop always reads the LATEST values — never stale closures
+  const scenesRef       = useRef([]);
+  const totalDurationRef = useRef(0);
+  useEffect(() => { scenesRef.current = scenes; },        [scenes]);
+  useEffect(() => { totalDurationRef.current = totalDuration; }, [totalDuration]);
+
+  useEffect(() => {
+    if (!configReady || !configHtml) return;
+    const data = parseConfig(configHtml);
+    console.log('[App] parsed scenes:', data.scenes.map(s =>
+      `Scene${s.sceneId} elems=${s.elements.length} start=${s.startTime} end=${s.endTime}`
+    ));
+    console.log('[App] totalDuration:', data.totalDuration);
+    setParsedData(data);
+  }, [configHtml, configReady]);
+
+  // ── Playback state ────────────────────────────────────────────────────────
+  const [currentTime,    setCurrentTime]    = useState(0);
+  const [isPlaying,      setIsPlaying]      = useState(false);
+
+  // ── Export state ──────────────────────────────────────────────────────────
+  const [isExporting,    setIsExporting]    = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [exportLog,      setExportLog]      = useState([]);
+  // Modal shown on completion
+  const [exportResult,   setExportResult]   = useState(null);
+  // { folderName, framesWritten }
+
+  // ── Refs ──────────────────────────────────────────────────────────────────
+  const rafRef           = useRef(null);
+  const lastTsRef        = useRef(null);
+  const currentTimeRef   = useRef(0);
+  const canvasRef        = useRef(null);
+  const audioManagerRef  = useRef(new AudioManager());
+  const cancelExportRef  = useRef(false);
+  const isExportingRef   = useRef(false);
+
+  useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
+
+  // ── Audio preload when scene graph updates ────────────────────────────────
+  useEffect(() => {
+    if (!scenes.length) return;
+    const mgr = audioManagerRef.current;
+    mgr.reset();
+    mgr.preload(scenes).then((durations) => {
+      const anyChanged = scenes.some((s) =>
+        s.elements.some((el) => el.audioSrc && durations[el.audioSrc] > 0)
+      );
+      if (anyChanged) {
+        setParsedData(applyAudioDurations(scenes, durations));
+      }
+    });
+  }, [scenes.length]);
+
+  // ── Active scene (derived) ────────────────────────────────────────────────
+  const activeScene = useMemo(() => {
+    if (!scenes.length) return null;
+    const found = scenes.find(
+      (s) => currentTime >= s.startTime && currentTime < s.endTime
+    );
+    if (found) return found;
+    if (currentTime >= totalDuration && totalDuration > 0) return scenes[scenes.length - 1];
+    return scenes[0];
+  }, [scenes, currentTime, totalDuration]);
+
+  // Log scene transitions
+  useEffect(() => {
+    if (activeScene) {
+      console.log(`[App] activeScene=${activeScene.sceneId} at t=${currentTime.toFixed(2)} (start=${activeScene.startTime} end=${activeScene.endTime})`);
+    }
+  }, [activeScene?.sceneId]);
+
+  // ── Audio file list (for FFmpeg command in modal) ─────────────────────────
+  const audioFiles = useMemo(() => {
+    const seen = new Set();
+    const list = [];
+    scenes.forEach((s) =>
+      s.elements.forEach((el) => {
+        if (el.audioSrc && !seen.has(el.audioSrc)) {
+          seen.add(el.audioSrc);
+          list.push(el.audioSrc);
+        }
+      })
+    );
+    return list;
+  }, [scenes]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // PREVIEW PLAYBACK
+  // ─────────────────────────────────────────────────────────────────────────
+  const stopPreview = useCallback(() => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    lastTsRef.current = null;
+    setIsPlaying(false);
+  }, []);
+
+  const startPreview = useCallback(() => {
+    if (isExportingRef.current || !scenesRef.current.length) return;
+
+    // Use ref values — these are always current even after async audio preload updates
+    if (currentTimeRef.current >= totalDurationRef.current) {
+      currentTimeRef.current = 0;
+      setCurrentTime(0);
+      audioManagerRef.current.reset();
+    }
+
+    setIsPlaying(true);
+    lastTsRef.current = null;
+
+    function frame(ts) {
+      if (!lastTsRef.current) lastTsRef.current = ts;
+      const delta = (ts - lastTsRef.current) / 1000;
+      lastTsRef.current = ts;
+
+      // Always read totalDuration from ref — never from closure
+      const dur     = totalDurationRef.current;
+      const newTime = Math.min(currentTimeRef.current + delta, dur);
+      currentTimeRef.current = newTime;
+      setCurrentTime(newTime);
+      audioManagerRef.current.tick(newTime, scenesRef.current);
+
+      if (newTime < dur) {
+        rafRef.current = requestAnimationFrame(frame);
+      } else {
+        setIsPlaying(false);
+        rafRef.current = null;
+      }
+    }
+
+    rafRef.current = requestAnimationFrame(frame);
+  // No deps on scenes/totalDuration — reads from refs inside frame()
+  }, []);
+
+  const handleTogglePlay = useCallback(() => {
+    if (isPlaying) stopPreview();
+    else           startPreview();
+  }, [isPlaying, startPreview, stopPreview]);
+
+  const handleReset = useCallback(() => {
+    stopPreview();
+    setCurrentTime(0);
+    currentTimeRef.current = 0;
+    audioManagerRef.current.reset();
+  }, [stopPreview]);
+
+  const handleSeek = useCallback((ratio) => {
+    const t = ratio * totalDurationRef.current;
+    setCurrentTime(t);
+    currentTimeRef.current = t;
+    audioManagerRef.current.markPlayedUpTo(t, scenesRef.current);
+  }, []);
+
+  // Keyboard shortcuts: Space = play/pause, R = reset, E = export
+  useEffect(() => {
+    function onKey(e) {
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (e.code === 'Space') { e.preventDefault(); handleTogglePlay(); }
+      if (e.code === 'KeyR')  { e.preventDefault(); handleReset(); }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [handleTogglePlay, handleReset]);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // EXPORT
+  // ─────────────────────────────────────────────────────────────────────────
+  const appendLog = useCallback((msg) => {
+    setExportLog((prev) => [...prev.slice(-400), msg]);
+  }, []);
+
+  const handleExport = useCallback(async () => {
+    if (!('showDirectoryPicker' in window)) {
+      alert('File System Access API not supported.\nUse Chrome 86+ or Edge 86+ on desktop.');
+      return;
+    }
+
+    stopPreview();
+
+    let dirHandle;
+    try {
+      dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      appendLog(`[ERROR] ${e.message}`);
+      return;
+    }
+
+    setIsExporting(true);
+    isExportingRef.current = true;
+    cancelExportRef.current = false;
+    setExportLog([]);
+    setExportProgress(0);
+    setExportResult(null);
+
+    const canvasEl = canvasRef.current;
+    if (!canvasEl) {
+      appendLog('[ERROR] Canvas not mounted.');
+      setIsExporting(false);
+      isExportingRef.current = false;
+      return;
+    }
+
+    const { framesWritten } = await runExport({
+      dirHandle,
+      canvasEl,
+      totalDuration: totalDurationRef.current,
+      scenes:        scenesRef.current,
+      setCurrentTime: (t) => {
+        currentTimeRef.current = t;
+        setCurrentTime(t);
+      },
+      onProgress: (pct) => setExportProgress(pct),
+      onLog:      appendLog,
+      cancelRef:  cancelExportRef,
+    });
+
+    setIsExporting(false);
+    isExportingRef.current = false;
+    setExportProgress(0);
+
+    // Reset timeline display
+    setCurrentTime(0);
+    currentTimeRef.current = 0;
+
+    // Show completion modal only if not cancelled
+    if (framesWritten > 0) {
+      setExportResult({ folderName: dirHandle.name, framesWritten });
+    }
+  }, [totalDuration, scenes, stopPreview, appendLog]);
+
+  const handleCancelExport = useCallback(() => {
+    cancelExportRef.current = true;
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────────────────────
+  return (
+    <div
+      style={{
+        width:    '100vw',
+        height:   '100vh',
+        background: '#0a0a14',
+        overflow: 'hidden',
+        display:  'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        position: 'relative',
+      }}
+    >
+      {/* ── Full-screen canvas area ── */}
+      <MasterCanvas
+        activeScene={activeScene}
+        currentTime={currentTime}
+        canvasRef={canvasRef}
+      />
+
+      {/* ── Floating icon controls (bottom-centre over canvas) ── */}
+      <FloatingControls
+        isPlaying={isPlaying}
+        isExporting={isExporting}
+        currentTime={currentTime}
+        totalDuration={totalDuration}
+        exportProgress={exportProgress}
+        onTogglePlay={handleTogglePlay}
+        onReset={handleReset}
+        onExport={handleExport}
+        onCancelExport={handleCancelExport}
+        onSeek={handleSeek}
+      />
+
+      {/* ── Export-done modal (shown after successful export) ── */}
+      {exportResult && (
+        <ExportDoneModal
+          audioFiles={audioFiles}
+          totalDuration={totalDuration}
+          exportLog={exportLog}
+          folderName={exportResult.folderName}
+          framesWritten={exportResult.framesWritten}
+          onClose={() => setExportResult(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+########################################################
+
+  \client\src\components\ExportDoneModal.jsx  
+########################################################
+        import React, { useState } from 'react';
+import { FPS, CANVAS_W, CANVAS_H } from '../engine/constants.js';
+
+/**
+ * ExportDoneModal — shown as a centred popup when export finishes.
+ * Displays:
+ *   • Summary stats (frames written, duration, folder)
+ *   • FFmpeg command (click-to-copy, selectable)
+ *   • Audio file manifest
+ *
+ * @param {{
+ *   audioFiles:    string[],
+ *   totalDuration: number,
+ *   exportLog:     string[],
+ *   folderName:    string,
+ *   framesWritten: number,
+ *   onClose:       () => void,
+ * }} props
+ */
+export default function ExportDoneModal({
+  audioFiles,
+  totalDuration,
+  exportLog,
+  folderName,
+  framesWritten,
+  onClose,
+}) {
+  const [copied, setCopied] = useState(false);
+  const totalFrames = Math.ceil(totalDuration * FPS);
+  const estMB       = ((totalFrames * 230) / 1024 / 1024).toFixed(1);
+  const ffmpegCmd   = buildCommand(audioFiles, FPS);
+
+  function copyCommand() {
+    navigator.clipboard.writeText(ffmpegCmd).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
+  return (
+    /* Backdrop */
+    <div
+      onClick={onClose}
+      style={{
+        position:  'fixed',
+        inset:     0,
+        background: 'rgba(0,0,0,0.72)',
+        display:   'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex:    1000,
+        backdropFilter: 'blur(4px)',
+      }}
+    >
+      {/* Modal panel — stop click propagation so clicking inside doesn't close */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background:   '#0f0f1e',
+          border:       '1px solid #2a2a4a',
+          borderRadius: '12px',
+          padding:      '28px 32px',
+          width:        'min(640px, 92vw)',
+          maxHeight:    '85vh',
+          overflowY:    'auto',
+          display:      'flex',
+          flexDirection: 'column',
+          gap:          '18px',
+          boxShadow:    '0 16px 64px rgba(0,0,0,0.7)',
+          color:        '#e0e0e0',
+          fontFamily:   "'Quicksand', sans-serif",
+          position:     'relative',
+        }}
+      >
+        {/* Close button */}
+        <button
+          onClick={onClose}
+          title="Close"
+          style={{
+            position:     'absolute',
+            top:          '14px',
+            right:        '16px',
+            background:   'transparent',
+            border:       'none',
+            color:        '#666',
+            fontSize:     '18px',
+            cursor:       'pointer',
+            lineHeight:   1,
+            padding:      '4px 8px',
+            borderRadius: '4px',
+          }}
+        >
+          ✕
+        </button>
+
+        {/* Title */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '22px' }}>✅</span>
+          <div>
+            <div style={{ fontSize: '17px', fontWeight: 700, color: '#fff' }}>
+              Export Complete
+            </div>
+            <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
+              {framesWritten.toLocaleString()} frames written to &nbsp;
+              <code style={{ color: '#79c0ff' }}>{folderName}/</code>
+            </div>
+          </div>
+        </div>
+
+        {/* Stats grid */}
+        <div
+          style={{
+            display:             'grid',
+            gridTemplateColumns: 'repeat(4, 1fr)',
+            gap:                 '10px',
+          }}
+        >
+          {[
+            ['Total Frames', totalFrames.toLocaleString()],
+            ['Duration',     `${totalDuration.toFixed(1)}s`],
+            ['Est. Size',    `~${estMB} MB`],
+            ['Frame Rate',   `${FPS} fps`],
+          ].map(([label, val]) => (
+            <div
+              key={label}
+              style={{
+                background:   '#161630',
+                borderRadius: '6px',
+                padding:      '8px 12px',
+                textAlign:    'center',
+              }}
+            >
+              <div style={{ fontSize: '10px', color: '#555', textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '3px' }}>
+                {label}
+              </div>
+              <div style={{ fontSize: '16px', fontWeight: 700, color: '#e0e0e0', fontFamily: 'monospace' }}>
+                {val}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* FFmpeg command */}
+        <div>
+          <div
+            style={{
+              display:        'flex',
+              alignItems:     'center',
+              justifyContent: 'space-between',
+              marginBottom:   '6px',
+            }}
+          >
+            <span style={{ fontSize: '11px', color: '#666', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+              🔧 FFmpeg command — run inside your export folder
+            </span>
+            <button
+              onClick={copyCommand}
+              style={{
+                background:   copied ? '#22c55e22' : '#3b82f622',
+                border:       `1px solid ${copied ? '#22c55e55' : '#3b82f655'}`,
+                color:        copied ? '#22c55e' : '#3b82f6',
+                borderRadius: '4px',
+                padding:      '3px 10px',
+                fontSize:     '11px',
+                cursor:       'pointer',
+                fontFamily:   "'Quicksand', sans-serif",
+                fontWeight:   600,
+              }}
+            >
+              {copied ? '✓ Copied!' : 'Copy'}
+            </button>
+          </div>
+          <div
+            style={{
+              background:  '#060612',
+              border:      '1px solid #1e1e3a',
+              borderRadius: '6px',
+              padding:     '12px 14px',
+              fontFamily:  "'Cascadia Code', 'Fira Code', monospace",
+              fontSize:    '11px',
+              color:       '#e6edf3',
+              userSelect:  'all',
+              lineHeight:  1.8,
+              whiteSpace:  'pre-wrap',
+              wordBreak:   'break-all',
+            }}
+            onClick={copyCommand}
+            title="Click to copy"
+          >
+            {ffmpegCmd}
+          </div>
+        </div>
+
+        {/* Audio files to copy */}
+        {audioFiles.length > 0 && (
+          <div>
+            <div style={{ fontSize: '11px', color: '#666', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '6px' }}>
+              📂 Audio files — copy to export folder first ({audioFiles.length} files)
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+              {audioFiles.map((f, i) => (
+                <span
+                  key={i}
+                  style={{
+                    background:   '#161630',
+                    border:       '1px solid #2a2a4a',
+                    borderRadius: '4px',
+                    padding:      '3px 9px',
+                    fontSize:     '11px',
+                    color:        '#79c0ff',
+                    fontFamily:   'monospace',
+                  }}
+                >
+                  {f.replace(/^\/audio\//, '')}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Export log (collapsed by default via scrollable box) */}
+        {exportLog.length > 0 && (
+          <details>
+            <summary
+              style={{
+                cursor:    'pointer',
+                fontSize:  '11px',
+                color:     '#555',
+                textTransform: 'uppercase',
+                letterSpacing: '0.8px',
+                userSelect: 'none',
+                outline:   'none',
+              }}
+            >
+              Export Log ({exportLog.length} lines)
+            </summary>
+            <div
+              style={{
+                background:   '#060612',
+                borderRadius: '6px',
+                padding:      '10px 14px',
+                fontFamily:   "'Cascadia Code', monospace",
+                fontSize:     '10px',
+                color:        '#7ee787',
+                maxHeight:    '160px',
+                overflowY:    'auto',
+                lineHeight:   1.6,
+                marginTop:    '6px',
+                border:       '1px solid #1e1e3a',
+              }}
+            >
+              {exportLog.map((line, i) => (
+                <div key={i}>{line}</div>
+              ))}
+            </div>
+          </details>
+        )}
+
+        {/* Close button (bottom) */}
+        <button
+          onClick={onClose}
+          style={{
+            background:   '#3b82f6',
+            border:       'none',
+            borderRadius: '6px',
+            padding:      '10px',
+            color:        '#fff',
+            fontSize:     '13px',
+            fontWeight:   700,
+            cursor:       'pointer',
+            fontFamily:   "'Quicksand', sans-serif",
+            marginTop:    '4px',
+          }}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function buildCommand(audioFiles, fps) {
+  const pads = (n) => String(n).padStart(5, '0');
+  const totalFrames = '...';
+
+  if (audioFiles.length === 0) {
+    return `ffmpeg -r ${fps} -i frame_%05d.jpg \\
+  -c:v libx264 -preset slow -crf 18 \\
+  -pix_fmt yuv420p \\
+  output.mp4`;
+  }
+
+  const inputs = audioFiles
+    .map((f) => `-i "${f.replace(/^\/audio\//, '')}"`)
+    .join(' \\\n  ');
+  const aMaps = audioFiles
+    .map((_, i) => `-map ${i + 1}:a`)
+    .join(' ');
+
+  return `ffmpeg -r ${fps} -i frame_%05d.jpg \\
+  ${inputs} \\
+  -map 0:v ${aMaps} \\
+  -c:v libx264 -preset slow -crf 18 \\
+  -c:a aac -b:a 192k \\
+  -pix_fmt yuv420p \\
+  output.mp4`;
+}
+
+########################################################
+
+  \client\src\components\FFmpegPanel.jsx  
+########################################################
+        import React from 'react';
+import { FPS, CANVAS_W, CANVAS_H } from '../engine/constants.js';
+
+/**
+ * Bottom panel: FFmpeg command + audio manifest + stats.
+ *
+ * @param {{
+ *   audioFiles:    string[],
+ *   totalDuration: number,
+ *   exportLog:     string[],
+ * }} props
+ */
+export default function FFmpegPanel({ audioFiles, totalDuration, exportLog }) {
+  const totalFrames = Math.ceil(totalDuration * FPS);
+  const estMB       = ((totalFrames * 230) / 1024 / 1024).toFixed(1);
+
+  const ffmpegCmd   = buildCommand(audioFiles);
+
+  return (
+    <div
+      style={{
+        background:   '#0d0d1a',
+        borderTop:    '1px solid #1e1e3a',
+        padding:      '14px 20px',
+        display:      'flex',
+        flexDirection: 'column',
+        gap:          '10px',
+        flexShrink:   0,
+        maxHeight:    '260px',
+        overflowY:    'auto',
+      }}
+    >
+      {/* Export log */}
+      {exportLog.length > 0 && (
+        <div
+          id="export-log"
+          style={{
+            background: '#060612',
+            borderRadius: '6px',
+            padding:    '10px 14px',
+            fontFamily: "'Cascadia Code', 'Fira Code', monospace",
+            fontSize:   '11px',
+            color:      '#7ee787',
+            maxHeight:  '120px',
+            overflowY:  'auto',
+            lineHeight: 1.6,
+            border:     '1px solid #1e1e3a',
+          }}
+        >
+          {exportLog.map((line, i) => (
+            <div key={i}>{line}</div>
+          ))}
+        </div>
+      )}
+
+      {/* Stats row */}
+      <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+        {[
+          ['Frames', totalFrames.toLocaleString()],
+          ['Duration', `${totalDuration.toFixed(1)}s`],
+          ['Est. disk', `~${estMB} MB`],
+          ['FPS', FPS],
+          ['Resolution', `${CANVAS_W}×${CANVAS_H}`],
+        ].map(([label, val]) => (
+          <div key={label} style={{ display: 'flex', gap: '5px', alignItems: 'baseline' }}>
+            <span style={{ fontSize: '10px', color: '#555', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              {label}
+            </span>
+            <span style={{ fontSize: '13px', color: '#ccc', fontFamily: 'monospace', fontWeight: 700 }}>
+              {val}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* FFmpeg command */}
+      <div>
+        <div style={{ fontSize: '10px', color: '#555', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '5px' }}>
+          🔧 FFmpeg Assembly Command — run inside your export folder
+        </div>
+        <div
+          style={{
+            background:  '#060612',
+            border:      '1px solid #1e1e3a',
+            borderRadius: '6px',
+            padding:     '10px 14px',
+            fontFamily:  "'Cascadia Code', 'Fira Code', monospace",
+            fontSize:    '11px',
+            color:       '#e6edf3',
+            wordBreak:   'break-all',
+            userSelect:  'all',
+            lineHeight:  1.7,
+            whiteSpace:  'pre-wrap',
+          }}
+        >
+          {ffmpegCmd}
+        </div>
+      </div>
+
+      {/* Audio manifest */}
+      {audioFiles.length > 0 && (
+        <div>
+          <div style={{ fontSize: '10px', color: '#555', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '4px' }}>
+            Audio files referenced ({audioFiles.length}) — copy to export folder before running FFmpeg
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {audioFiles.map((f, i) => (
+              <span
+                key={i}
+                style={{
+                  background: '#161630',
+                  border:     '1px solid #2a2a4a',
+                  borderRadius: '4px',
+                  padding:    '2px 8px',
+                  fontSize:   '11px',
+                  color:      '#79c0ff',
+                  fontFamily: 'monospace',
+                }}
+              >
+                {f.replace(/^\/audio\//, '')}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function buildCommand(audioFiles) {
+  if (audioFiles.length === 0) {
+    return `ffmpeg -r ${FPS} -i frame_%05d.jpg \\
+  -c:v libx264 -preset slow -crf 18 \\
+  -pix_fmt yuv420p \\
+  output.mp4`;
+  }
+
+  const inputs  = audioFiles.map((f) => `-i "${f.replace(/^\/audio\//, '')}"`).join(' \\\n  ');
+  const aMaps   = audioFiles.map((_, i) => `-map ${i + 1}:a`).join(' ');
+
+  return `ffmpeg -r ${FPS} -i frame_%05d.jpg \\
+  ${inputs} \\
+  -map 0:v ${aMaps} \\
+  -c:v libx264 -preset slow -crf 18 \\
+  -c:a aac -b:a 192k \\
+  -pix_fmt yuv420p \\
+  output.mp4`;
+}
+
+########################################################
+
+  \client\src\components\FloatingControls.jsx  
+########################################################
+        import React from 'react';
+import { clamp } from '../engine/mathUtils.js';
+
+/**
+ * FloatingControls — a translucent icon-button strip that floats over the
+ * canvas in the bottom-right corner. Takes almost zero screen real-estate.
+ *
+ * Layout:
+ *   [⏮] [▶/⏸] [📁] | seek bar | 00:00.00/00:00.00
+ *
+ * During export, the seek bar turns amber and shows % progress.
+ * All buttons are icon-only with tooltips. Hover reveals a backdrop.
+ */
+export default function FloatingControls({
+  isPlaying,
+  isExporting,
+  currentTime,
+  totalDuration,
+  exportProgress,
+  onTogglePlay,
+  onReset,
+  onExport,
+  onCancelExport,
+  onSeek,
+}) {
+  const pct = totalDuration > 0
+    ? clamp((currentTime / totalDuration) * 100, 0, 100)
+    : 0;
+
+  function handleSeekClick(e) {
+    const rect  = e.currentTarget.getBoundingClientRect();
+    const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+    onSeek(ratio);
+  }
+
+  return (
+    <div
+      style={{
+        position:     'absolute',
+        bottom:       '8px',
+        right:        '10px',
+        zIndex:       500,
+        display:      'flex',
+        alignItems:   'center',
+        gap:          '4px',
+        background:   'rgba(8, 8, 20, 0.54)',
+        backdropFilter: 'blur(10px)',
+        border:       '1px solid rgba(255,255,255,0.07)',
+        borderRadius: '22px',
+        padding:      '4px 8px',
+        userSelect:   'none',
+        boxShadow:    '0 3px 14px rgba(0,0,0,0.34)',
+        opacity:      0.72,
+        transition:   'opacity 0.2s',
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+      onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.82')}
+    >
+      {/* ── Reset ── */}
+      <IconBtn
+        onClick={onReset}
+        disabled={isExporting}
+        title="Reset to frame 0  (R)"
+        color="#6366f1"
+      >
+        ⏮
+      </IconBtn>
+
+      {/* ── Play / Pause ── */}
+      <IconBtn
+        onClick={onTogglePlay}
+        disabled={isExporting}
+        title={isPlaying ? 'Pause  (Space)' : 'Play Preview  (Space)'}
+        color={isPlaying ? '#ef4444' : '#22c55e'}
+        large
+      >
+        {isPlaying ? '⏸' : '▶'}
+      </IconBtn>
+
+      {/* ── Seek bar ── */}
+      <div
+        onClick={handleSeekClick}
+        title="Seek — click anywhere"
+        style={{
+          width:        '100px',
+          height:       '3px',
+          background:   'rgba(255,255,255,0.15)',
+          borderRadius: '2px',
+          cursor:       'pointer',
+          overflow:     'hidden',
+          position:     'relative',
+          flexShrink:   0,
+        }}
+      >
+        <div
+          style={{
+            height:     '100%',
+            width:      `${isExporting ? exportProgress : pct}%`,
+            background: isExporting ? '#f59e0b' : '#3b82f6',
+            borderRadius: '2px',
+            transition: 'none',
+          }}
+        />
+      </div>
+
+      {/* ── Time readout ── */}
+      <span
+        style={{
+          fontSize:   '9px',
+          color:      isExporting ? '#f59e0b' : 'rgba(255,255,255,0.55)',
+          fontFamily: 'monospace',
+          whiteSpace: 'nowrap',
+          minWidth:   '74px',
+          textAlign:  'center',
+          letterSpacing: '0.3px',
+        }}
+      >
+        {isExporting
+          ? `${exportProgress}%`
+          : `${fmt(currentTime)} / ${fmt(totalDuration)}`}
+      </span>
+
+      {/* ── Divider ── */}
+      <div style={{ width: '1px', height: '12px', background: 'rgba(255,255,255,0.1)' }} />
+
+      {/* ── Export / Cancel ── */}
+      {isExporting ? (
+        <IconBtn
+          onClick={onCancelExport}
+          title="Cancel export"
+          color="#ef4444"
+        >
+          ✕
+        </IconBtn>
+      ) : (
+        <IconBtn
+          onClick={onExport}
+          disabled={isPlaying}
+          title="Select folder & export frames  (E)"
+          color="#f59e0b"
+        >
+          📁
+        </IconBtn>
+      )}
+    </div>
+  );
+}
+
+// ── Reusable icon button ──────────────────────────────────────────────────────
+function IconBtn({ children, onClick, disabled, title, color, large }) {
+  const size = large ? 26 : 22;
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      style={{
+        width:        `${size}px`,
+        height:       `${size}px`,
+        background:   disabled ? 'rgba(255,255,255,0.05)' : `${color}22`,
+        border:       `1px solid ${disabled ? 'rgba(255,255,255,0.05)' : color + '55'}`,
+        borderRadius: '50%',
+        color:        disabled ? 'rgba(255,255,255,0.2)' : color,
+        fontSize:     large ? '12px' : '10px',
+        lineHeight:   1,
+        cursor:       disabled ? 'not-allowed' : 'pointer',
+        display:      'flex',
+        alignItems:   'center',
+        justifyContent: 'center',
+        padding:      0,
+        flexShrink:   0,
+        transition:   'background 0.15s, transform 0.1s',
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled) e.currentTarget.style.background = `${color}44`;
+      }}
+      onMouseLeave={(e) => {
+        if (!disabled) e.currentTarget.style.background = `${color}22`;
+      }}
+      onMouseDown={(e) => {
+        if (!disabled) e.currentTarget.style.transform = 'scale(0.9)';
+      }}
+      onMouseUp={(e) => {
+        if (!disabled) e.currentTarget.style.transform = 'scale(1)';
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function fmt(s) {
+  const m  = Math.floor(s / 60);
+  const ss = Math.floor(s % 60);
+  const cs = Math.floor((s % 1) * 100);
+  return `${pad(m)}:${pad(ss)}.${pad(cs)}`;
+}
+function pad(n) { return String(n).padStart(2, '0'); }
+
+########################################################
+
+  \client\src\components\MasterCanvas.jsx  
+########################################################
+        import React, { useRef, useEffect, useState } from 'react';
+import { CANVAS_W, CANVAS_H } from '../engine/constants.js';
+import SceneRenderer from './SceneRenderer.jsx';
+
+/**
+ * MasterCanvas — the 1920×1080 whiteboard surface.
+ *
+ * The outer clip container fills as much viewport space as possible while
+ * maintaining a 16:9 aspect ratio. The inner 1920×1080 div is scaled
+ * via CSS transform so pixel positions defined in master.css are always
+ * exact. On export the un-scaled 1920×1080 div is snapshotted directly.
+ *
+ * @param {{
+ *   activeScene:  import('../engine/configParser.js').Scene | null,
+ *   currentTime:  number,
+ *   canvasRef:    React.RefObject,
+ * }} props
+ */
+export default function MasterCanvas({ activeScene, currentTime, canvasRef }) {
+  // Compute the best-fit scale to fill the parent container.
+  // We read the parent's dimensions and re-compute on resize.
+  const [scale, setScale] = useState(0.4);
+  const wrapperRef = useRef(null);
+
+  useEffect(() => {
+    function measure() {
+      const el = wrapperRef.current?.parentElement;
+      if (!el) return;
+      const availW = el.clientWidth - 12;
+      const availH = el.clientHeight - 12;
+      const fitByW = availW / CANVAS_W;
+      const fitByH = availH / CANVAS_H;
+      setScale(Math.min(fitByW, fitByH, 1));  // never upscale beyond 1
+    }
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (wrapperRef.current?.parentElement) {
+      ro.observe(wrapperRef.current.parentElement);
+    }
+    window.addEventListener('resize', measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
+
+  const displayW = Math.round(CANVAS_W * scale);
+  const displayH = Math.round(CANVAS_H * scale);
+
+  return (
+    /* Outer clip container — exactly the scaled size */
+    <div
+      ref={wrapperRef}
+      style={{
+        width:        `${displayW}px`,
+        height:       `${displayH}px`,
+        overflow:     'hidden',
+        position:     'relative',
+        flexShrink:   0,
+        borderRadius: '8px',
+        border:       '1px solid #1e1e3a',
+        background:   '#fff',
+        boxShadow:    '0 0 0 1px #12122a, 0 8px 48px rgba(0,0,0,0.7)',
+      }}
+    >
+      {/* Inner 1920×1080 surface — CSS-scaled down for display */}
+      <div
+        ref={canvasRef}
+        id="master-canvas"
+        style={{
+          width:           `${CANVAS_W}px`,
+          height:          `${CANVAS_H}px`,
+          transform:       `scale(${scale})`,
+          transformOrigin: 'top left',
+          position:        'absolute',
+          top:             0,
+          left:            0,
+          background:      '#ffffff',
+          overflow:        'hidden',
+          fontFamily:      "'Kalam', cursive, sans-serif",
+        }}
+      >
+        {activeScene ? (
+          <SceneRenderer
+            scene={activeScene}
+            currentTime={currentTime}
+          />
+        ) : (
+          <div
+            style={{
+              display:        'flex',
+              alignItems:     'center',
+              justifyContent: 'center',
+              height:         '100%',
+              color:          '#94a3b8',
+              fontSize:       '38px',
+              fontFamily:     "'Kalam', cursive",
+              fontWeight:     600,
+              textAlign:      'center',
+              padding:        '80px',
+              lineHeight:     1.5,
+            }}
+          >
+            📋 No scenes loaded.
+            <br />
+            Edit  client/public/config/scene.html  and refresh.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+########################################################
+
+  \client\src\components\SceneRenderer.jsx  
+########################################################
+        import React from 'react';
+import { CANVAS_W, CANVAS_H } from '../engine/constants.js';
+import HeadingRenderer   from '../renderers/HeadingRenderer.jsx';
+import ParagraphRenderer from '../renderers/ParagraphRenderer.jsx';
+import ImageRenderer     from '../renderers/ImageRenderer.jsx';
+import UnderlineRenderer from '../renderers/UnderlineRenderer.jsx';
+import EraserRenderer    from '../renderers/EraserRenderer.jsx';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CLASS → PIXEL EXTRACTORS
+// These parse master.css utility classes to concrete pixel values.
+// This is the single source of truth — renderers receive px numbers only.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Extract `top-NNN` → number (px) */
+function topFromClass(cls, fallback = 0) {
+  const m = cls.match(/\btop-(\d+)\b/);
+  return m ? parseInt(m[1], 10) : fallback;
+}
+
+/** Extract `left-NNN` → number (px) */
+function leftFromClass(cls, fallback = 0) {
+  const m = cls.match(/\bleft-(\d+)\b/);
+  return m ? parseInt(m[1], 10) : fallback;
+}
+
+/** Extract `w-NNN` → number (px) */
+function widthFromClass(cls, fallback = 1400) {
+  const m = cls.match(/\bw-(\d+)\b/);
+  return m ? parseInt(m[1], 10) : fallback;
+}
+
+/** Extract `h-NNN` → number (px) */
+function heightFromClass(cls, fallback = 'auto') {
+  const m = cls.match(/\bh-(\d+)\b/);
+  return m ? parseInt(m[1], 10) : fallback;
+}
+
+/** Extract font-size from text-* class → px number */
+export function fontSizeFromClass(cls, fallback = 36) {
+  const sizes = {
+    'text-xs': 16, 'text-sm': 20, 'text-base': 24,
+    'text-lg': 28, 'text-xl': 32, 'text-2xl': 38,
+    'text-3xl': 45, 'text-4xl': 52, 'text-5xl': 64,
+    'text-6xl': 75, 'text-7xl': 85, 'text-8xl': 95, 'text-9xl': 110,
+  };
+  for (const [k, v] of Object.entries(sizes)) {
+    if (cls.includes(k)) return v;
+  }
+  return fallback;
+}
+
+/** Extract color value from text-COLOR class */
+export function colorFromClass(cls, fallback = '#1a1a1a') {
+  const map = {
+    'text-black':      '#000000',
+    'text-white':      '#ffffff',
+    'text-gray':       '#4b5563',
+    'text-light-gray': '#9ca3af',
+    'text-red':        '#e11d48',
+    'text-blue':       '#1d4ed8',
+    'text-cyan':       '#0284c7',
+    'text-green':      '#10b981',
+    'text-emerald':    '#047857',
+    'text-purple':     '#7e22ce',
+    'text-fuchsia':    '#c026d3',
+    'text-pink':       '#db2777',
+    'text-orange':     '#ea580c',
+    'text-yellow':     '#d97706',
+  };
+  for (const [k, v] of Object.entries(map)) {
+    if (cls.includes(k)) return v;
+  }
+  return fallback;
+}
+
+/** Extract underline bar color from underline-COLOR class.
+ *  Values mirror master.css exactly — single source of truth is the class name. */
+export function underlineColorFromClass(cls) {
+  const map = {
+    'underline-red':    '#e11d48',
+    'underline-blue':   '#1d4ed8',
+    'underline-green':  '#10b981',
+    'underline-black':  '#000000',
+    'underline-purple': '#7e22ce',
+    'underline-orange': '#ea580c',
+    'underline-cyan':   '#0284c7',
+    'underline-fuchsia':'#c026d3',
+    'underline-pink':   '#db2777',
+    'underline-yellow': '#d97706',
+    'underline-lime':   '#65a30d',
+  };
+  for (const [k, v] of Object.entries(map)) {
+    if (cls.includes(k)) return v;
+  }
+  return '#10b981'; // default → green (matches underline-green in master.css)
+}
+
+/** Extract font-family string from font-* class.
+ *  Falls back to Kalam — the canonical whiteboard handwriting font. */
+export function fontFamilyFromClass(cls) {
+  const map = {
+    'font-kalam':       "'Kalam', cursive",
+    'font-caveat':      "'Caveat', cursive",
+    'font-patrick':     "'Patrick Hand', cursive",
+    'font-architect':   "'Architects Daughter', cursive",
+    'font-delius':      "'Delius', cursive",
+    'font-fredoka':     "'Fredoka', sans-serif",
+    'font-comfortaa':   "'Comfortaa', sans-serif",
+    'font-shadow':      "'Shadows Into Light', cursive",
+    'font-amatic':      "'Amatic SC', cursive",
+    'font-marker':      "'Permanent Marker', cursive",
+    'font-indie':       "'Indie Flower', cursive",
+    'font-another-hand':"'Just Another Hand', cursive",
+    'font-rock-salt':   "'Rock Salt', cursive",
+    'font-quicksand':   "'Quicksand', sans-serif",
+    'font-pangolin':    "'Kalam', cursive",  // remapped → Kalam until changed
+  };
+  for (const [k, v] of Object.entries(map)) {
+    if (cls.includes(k)) return v;
+  }
+  return "'Kalam', cursive";  // global default
+}
+
+/** true if cls contains 'bold' or 'font-bold' */
+export function isBold(cls) {
+  return /\b(bold|font-bold)\b/.test(cls);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCENE RENDERER
+// ─────────────────────────────────────────────────────────────────────────────
+
+export default function SceneRenderer({ scene, currentTime }) {
+  const { elements, startTime, endTime, sceneId } = scene;
+
+  // Pre-compute every element's absolute seqStartTime BEFORE JSX render.
+  // This avoids any mutation-during-render fragility with JSX map callbacks.
+  const seqStartTimes = [];
+  let acc = startTime;
+  for (const el of elements) {
+    seqStartTimes.push(acc);
+    acc += el.slotDuration;
+  }
+
+  // Time within this scene (0 = scene start)
+  const sceneLocalTime = currentTime - startTime;
+
+  return (
+    <div
+      style={{
+        position:   'absolute',
+        top:        0,
+        left:       0,
+        width:      `${CANVAS_W}px`,
+        height:     `${CANVAS_H}px`,
+        background: '#ffffff',
+        overflow:   'hidden',
+      }}
+    >
+      {/* Scene badge top-right */}
+      <span
+        style={{
+          position:      'absolute',
+          top:           '28px',
+          right:         '50px',
+          fontSize:      '22px',
+          fontWeight:    700,
+          color:         '#c8cdd5',
+          letterSpacing: '1px',
+          fontFamily:    "'Quicksand', sans-serif",
+          zIndex:        200,
+          pointerEvents: 'none',
+        }}
+      >
+        Scene {sceneId}
+      </span>
+
+      {elements.map((el, idx) => {
+        const seqStart = seqStartTimes[idx];
+
+        const cls        = el.rawClasses || '';
+        const top        = topFromClass(cls, 80);
+        const left       = leftFromClass(cls, 100);
+        const width      = widthFromClass(cls, 1400);
+        const height     = heightFromClass(cls, 'auto');
+        const fontSize   = fontSizeFromClass(cls, el.type === 'heading' ? 75 : 36);
+        const color      = colorFromClass(cls, '#1a1a1a');
+        const fontFamily = fontFamilyFromClass(cls);
+        const bold       = isBold(cls);
+        const lineH      = Math.round(fontSize * 1.7);
+
+        const sharedLayout = { top, left, width, height, fontSize, color, fontFamily, bold, lineH };
+
+        return (
+          <React.Fragment key={el.seqId}>
+            {el.type === 'heading' && (
+              <HeadingRenderer
+                element={el}
+                seqStartTime={seqStart}
+                currentTime={currentTime}
+                layout={sharedLayout}
+              />
+            )}
+            {el.type === 'paragraph' && (
+              <ParagraphRenderer
+                element={el}
+                seqStartTime={seqStart}
+                currentTime={currentTime}
+                layout={sharedLayout}
+              />
+            )}
+            {(el.type === 'underline' || el.type === 'divider') && (
+              <UnderlineRenderer
+                element={el}
+                seqStartTime={seqStart}
+                currentTime={currentTime}
+                layout={sharedLayout}
+              />
+            )}
+            {el.type === 'image' && (
+              <ImageRenderer
+                element={el}
+                seqStartTime={seqStart}
+                currentTime={currentTime}
+                layout={sharedLayout}
+              />
+            )}
+            {el.type === 'eraser' && (
+              <EraserRenderer
+                element={el}
+                seqStartTime={seqStart}
+                currentTime={currentTime}
+                layout={sharedLayout}
+              />
+            )}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+########################################################
+
+  \client\src\components\Toolbar.jsx  
+########################################################
+        import React from 'react';
+import { FPS } from '../engine/constants.js';
+import { clamp } from '../engine/mathUtils.js';
+
+/**
+ * Thin toolbar strip: Play/Pause, Reset, Export, seek bar.
+ * Kept minimal — the canvas takes the rest of the screen.
+ *
+ * @param {{
+ *   isPlaying:        boolean,
+ *   isExporting:      boolean,
+ *   currentTime:      number,
+ *   totalDuration:    number,
+ *   exportProgress:   number,
+ *   onTogglePlay:     () => void,
+ *   onReset:          () => void,
+ *   onExport:         () => void,
+ *   onCancelExport:   () => void,
+ *   onSeek:           (ratio: number) => void,
+ * }} props
+ */
+export default function Toolbar({
+  isPlaying,
+  isExporting,
+  currentTime,
+  totalDuration,
+  exportProgress,
+  onTogglePlay,
+  onReset,
+  onExport,
+  onCancelExport,
+  onSeek,
+}) {
+  const progressPct = totalDuration > 0
+    ? clamp((currentTime / totalDuration) * 100, 0, 100)
+    : 0;
+
+  function handleSeekClick(e) {
+    const rect  = e.currentTarget.getBoundingClientRect();
+    const ratio = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+    onSeek(ratio);
+  }
+
+  return (
+    <div
+      style={{
+        display:        'flex',
+        alignItems:     'center',
+        gap:            '10px',
+        padding:        '8px 14px',
+        background:     '#161622',
+        borderBottom:   '1px solid #2a2a4a',
+        flexShrink:     0,
+        flexWrap:       'wrap',
+        userSelect:     'none',
+        position:       'relative',
+        zIndex:         50,
+      }}
+    >
+      {/* Brand */}
+      <span
+        style={{
+          fontSize:    '13px',
+          fontWeight:  800,
+          color:       '#e0e0ff',
+          letterSpacing: '-0.3px',
+          marginRight: '4px',
+          fontFamily:  "'Quicksand', sans-serif",
+          whiteSpace:  'nowrap',
+        }}
+      >
+        🎬 Whiteboard Engine
+      </span>
+
+      <div style={{ width: '1px', height: '22px', background: '#2a2a4a' }} />
+
+      {/* Play / Pause */}
+      <button
+        onClick={onTogglePlay}
+        disabled={isExporting}
+        style={btnStyle(isPlaying ? '#ef4444' : '#22c55e', isExporting)}
+        title={isPlaying ? 'Pause (Space)' : 'Play Preview (Space)'}
+      >
+        {isPlaying ? '⏸ Pause' : '▶ Play'}
+      </button>
+
+      {/* Reset */}
+      <button
+        onClick={onReset}
+        disabled={isExporting}
+        style={btnStyle('#6366f1', isExporting)}
+        title="Reset to frame 0"
+      >
+        ⏮
+      </button>
+
+      {/* Seek bar + time */}
+      <div
+        style={{
+          flex:     '1 1 200px',
+          minWidth: '100px',
+          display:  'flex',
+          alignItems: 'center',
+          gap:      '8px',
+        }}
+      >
+        <div
+          onClick={handleSeekClick}
+          style={{
+            flex:       1,
+            height:     '8px',
+            background: '#2a2a4a',
+            borderRadius: '4px',
+            cursor:     'pointer',
+            overflow:   'hidden',
+            position:   'relative',
+          }}
+          title="Click to seek"
+        >
+          <div
+            style={{
+              height:     '100%',
+              width:      `${progressPct}%`,
+              background: isExporting ? '#f59e0b' : '#3b82f6',
+              borderRadius: '4px',
+              transition: 'none',
+            }}
+          />
+        </div>
+        <span
+          style={{
+            fontSize:   '11px',
+            color:      '#888',
+            fontFamily: 'monospace',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {fmt(currentTime)} / {fmt(totalDuration)}
+        </span>
+      </div>
+
+      <div style={{ width: '1px', height: '22px', background: '#2a2a4a' }} />
+
+      {/* Export button or progress */}
+      {isExporting ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div
+            style={{
+              width:      '90px',
+              height:     '8px',
+              background: '#2a2a4a',
+              borderRadius: '4px',
+              overflow:   'hidden',
+            }}
+          >
+            <div
+              style={{
+                height:     '100%',
+                width:      `${exportProgress}%`,
+                background: '#f59e0b',
+                borderRadius: '4px',
+                transition: 'none',
+              }}
+            />
+          </div>
+          <span style={{ fontSize: '11px', color: '#f59e0b', fontFamily: 'monospace' }}>
+            {exportProgress}%
+          </span>
+          <button
+            onClick={onCancelExport}
+            style={btnStyle('#ef4444', false)}
+          >
+            ⛔ Cancel
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={onExport}
+          disabled={isPlaying}
+          style={{
+            ...btnStyle('#f59e0b', isPlaying),
+            fontWeight: 700,
+            whiteSpace: 'nowrap',
+          }}
+          title="Select output folder and export all frames to disk"
+        >
+          📁 Select Folder &amp; Export
+        </button>
+      )}
+    </div>
+  );
+}
+
+function btnStyle(color, disabled) {
+  return {
+    background:    disabled ? '#333' : color,
+    color:         disabled ? '#666' : '#fff',
+    border:        'none',
+    borderRadius:  '5px',
+    padding:       '6px 14px',
+    fontSize:      '12px',
+    fontWeight:    600,
+    cursor:        disabled ? 'not-allowed' : 'pointer',
+    fontFamily:    "'Quicksand', sans-serif",
+    letterSpacing: '0.2px',
+    whiteSpace:    'nowrap',
+  };
+}
+
+function fmt(seconds) {
+  const m  = Math.floor(seconds / 60);
+  const s  = Math.floor(seconds % 60);
+  const cs = Math.floor((seconds % 1) * 100);
+  return `${pad(m)}:${pad(s)}.${pad(cs)}`;
+}
+
+function pad(n) {
+  return String(n).padStart(2, '0');
+}
+
+########################################################
+
+  \client\src\engine\audioManager.js  
+########################################################
+        // ─────────────────────────────────────────────────────────────────────────────
+// AUDIO MANAGER
+// Fires HTML5 Audio nodes at their exact timeline cue points.
+// Tracks what has already played so no cue fires twice.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export class AudioManager {
+  constructor() {
+    /** @type {Map<string, HTMLAudioElement>} */
+    this._nodes  = new Map();
+    /** @type {Set<string>} */
+    this._played = new Set();
+  }
+
+  /**
+   * Pre-create Audio nodes for all audio sources in the scene graph.
+   * Returns a Promise that resolves with a map of { src → duration }.
+   *
+   * @param {import('./configParser.js').Scene[]} scenes
+   * @returns {Promise<Object.<string, number>>}
+   */
+  preload(scenes) {
+    const promises = [];
+    const durations = {};
+
+    scenes.forEach((scene) => {
+      scene.elements.forEach((el) => {
+        if (!el.audioSrc || this._nodes.has(el.audioSrc)) return;
+        const audio = new Audio();
+        audio.preload = 'metadata';
+        this._nodes.set(el.audioSrc, audio);
+
+        const p = new Promise((resolve) => {
+          audio.addEventListener('loadedmetadata', () => {
+            durations[el.audioSrc] = audio.duration;
+            resolve();
+          }, { once: true });
+          audio.addEventListener('error', () => {
+            // Missing audio file — resolve gracefully with 0
+            durations[el.audioSrc] = 0;
+            resolve();
+          }, { once: true });
+          audio.src = el.audioSrc;
+        });
+        promises.push(p);
+      });
+    });
+
+    return Promise.all(promises).then(() => durations);
+  }
+
+  /** Completely stop all audio and reset all cue tracking. */
+  reset() {
+    this._nodes.forEach((node) => {
+      node.pause();
+      node.currentTime = 0;
+    });
+    this._played.clear();
+  }
+
+  /**
+   * Called every frame during preview playback.
+   * Fires an audio node if currentTime has just passed its cue start.
+   *
+   * @param {number} currentTime
+   * @param {import('./configParser.js').Scene[]} scenes
+   */
+  tick(currentTime, scenes) {
+    let cursor = 0;
+    scenes.forEach((scene) => {
+      scene.elements.forEach((el) => {
+        const cueStart = cursor;
+        cursor += el.slotDuration;
+
+        if (!el.audioSrc) return;
+        const key = el.audioSrc;
+        if (currentTime >= cueStart && !this._played.has(key)) {
+          this._played.add(key);
+          const node = this._nodes.get(key);
+          if (node) {
+            node.currentTime = 0;
+            node.play().catch(() => { /* autoplay policy — silently ignored */ });
+          }
+        }
+      });
+    });
+  }
+
+  /**
+   * Mark all audio cues before `upToTime` as already played.
+   * Used after a seek to prevent re-firing past cues.
+   *
+   * @param {number} upToTime
+   * @param {import('./configParser.js').Scene[]} scenes
+   */
+  markPlayedUpTo(upToTime, scenes) {
+    this._played.clear();
+    this.stopAll();
+    let cursor = 0;
+    scenes.forEach((scene) => {
+      scene.elements.forEach((el) => {
+        if (el.audioSrc && cursor < upToTime) {
+          this._played.add(el.audioSrc);
+        }
+        cursor += el.slotDuration;
+      });
+    });
+  }
+
+  /** Pause all currently playing nodes without resetting. */
+  stopAll() {
+    this._nodes.forEach((node) => node.pause());
+  }
+}
+
+########################################################
+
+  \client\src\engine\configParser.js  
+########################################################
+        // ─────────────────────────────────────────────────────────────────────────────
+// CONFIG PARSER
+// Converts a raw HTML/XML config string → a typed scene graph.
+// ─────────────────────────────────────────────────────────────────────────────
+import { BASE_SEQ_DURATION, TYPING_SPEED, FPS, ANIMATION_CONFIG } from './constants.js';
+
+/**
+ * Compute the animation duration (seconds) for one element based on its
+ * type and content length — exactly the framesPerCharacter approach from
+ * the POC's whiteboard.config.js getAnimationFrames().
+ *
+ * @param {'heading'|'paragraph'|'underline'|'image'|'eraser'|'divider'} type
+ * @param {string} content   - text content (HTML stripped) or image src
+ * @param {string} rawClasses
+ * @returns {number} seconds
+ */
+function computeAnimDuration(type, content, rawClasses) {
+  const plainLen = content.replace(/<[^>]+>/g, '').length;
+
+  switch (type) {
+    case 'heading': {
+      const cfg = TYPING_SPEED.heading;
+      const frames = Math.max(
+        cfg.minDuration * FPS,
+        plainLen * cfg.framesPerCharacter,
+      );
+      return Math.min(frames, cfg.maxDuration * FPS) / FPS;
+    }
+    case 'paragraph': {
+      const cfg = TYPING_SPEED.paragraph;
+      const frames = Math.max(
+        cfg.minDuration * FPS,
+        plainLen * cfg.framesPerCharacter,
+      );
+      return Math.min(frames, cfg.maxDuration * FPS) / FPS;
+    }
+    case 'underline': {
+      const cfg = TYPING_SPEED.underline;
+      // Extract width from w-NNN class
+      const wMatch = rawClasses.match(/\bw-(\d+)\b/);
+      const widthPx = wMatch ? parseInt(wMatch[1], 10) : 300;
+      const frames = Math.max(
+        cfg.minDuration * FPS,
+        Math.ceil(widthPx / cfg.pxPerFrame),
+      );
+      return Math.min(frames, cfg.maxDuration * FPS) / FPS;
+    }
+    case 'image':
+      return TYPING_SPEED.image.fixedDuration;
+    case 'eraser':
+      return ANIMATION_CONFIG.eraser.speed.durationInFrames / FPS;
+    default:
+      return 0.5; // dividers are near-instant
+  }
+}
+
+/**
+ * @typedef {Object} SceneElement
+ * @property {string} seqId
+ * @property {'heading'|'paragraph'|'underline'|'image'|'eraser'|'divider'} type
+ * @property {string} content      - text content or image src
+ * @property {string} rawClasses   - space-separated class string from the tag
+ * @property {string} tag          - original HTML tag name
+ * @property {string|null} audioSrc - audio src that fires with this element (null if none)
+ * @property {number} slotDuration  - actual slot duration (may extend for audio)
+ */
+
+/**
+ * @typedef {Object} Scene
+ * @property {string} sceneId
+ * @property {number} sceneIndex
+ * @property {SceneElement[]} elements
+ * @property {number} startTime    - absolute seconds
+ * @property {number} endTime
+ * @property {number} duration
+ */
+
+/**
+ * Parse an HTML/XML config string into a structured scene graph.
+ *
+ * @param {string} htmlString
+ * @returns {{ scenes: Scene[], totalDuration: number }}
+ */
+export function parseConfig(htmlString) {
+  const parser = new DOMParser();
+
+  // Parse as XHTML so self-closing <div /> tags are honoured correctly.
+  // 'text/html' ignores /> on non-void elements causing siblings to be
+  // swallowed as children of the unclosed tag, breaking element iteration.
+  let doc;
+  try {
+    doc = parser.parseFromString(
+      `<root xmlns="http://www.w3.org/1999/xhtml">${htmlString.trim()}</root>`,
+      'application/xhtml+xml'
+    );
+    // If the parser returns a parseerror document, fall back to text/html
+    if (doc.querySelector('parsererror')) throw new Error('xhtml parse failed');
+  } catch (_) {
+    doc = parser.parseFromString(
+      `<root>${htmlString.trim()}</root>`,
+      'text/html'
+    );
+  }
+
+  const scenes = [];
+
+  // Works for both xhtml (doc element is <root>) and text/html (<html><body>)
+  const sceneDivs = doc.querySelectorAll('[data-sceneid]');
+
+  console.log('[configParser] found', sceneDivs.length, 'scenes');
+
+  sceneDivs.forEach((sceneEl, sceneIndex) => {
+    const sceneId = sceneEl.getAttribute('data-sceneid');
+
+    // Build a map: seqId → audio src
+    /** @type {Object.<string, string>} */
+    const audioForSeq = {};
+    sceneEl.querySelectorAll('audio[data-audiotimelineseqid]').forEach((audioEl) => {
+      const seqId = audioEl.getAttribute('data-audiotimelineseqid');
+      audioForSeq[seqId] = audioEl.getAttribute('src') || '';
+    });
+
+    /** @type {SceneElement[]} */
+    const elements = [];
+
+    Array.from(sceneEl.children).forEach((child) => {
+      // Skip audio tags — they are looked up via audioForSeq
+      if (child.tagName.toLowerCase() === 'audio') return;
+
+      const seqId = child.getAttribute('data-timelinesequenceid');
+      if (!seqId) return;
+
+      const tag         = child.tagName.toLowerCase();
+      const rawClasses  = child.getAttribute('class') || '';
+      let type          = 'divider';
+      let content       = '';
+
+      if (tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4') {
+        type    = 'heading';
+        content = child.innerHTML.trim(); // keep inner markup (spans/highlights)
+      } else if (tag === 'p' || tag === 'span') {
+        type    = 'paragraph';
+        content = child.innerHTML.trim();
+      } else if (tag === 'div') {
+        if (rawClasses.includes('underline')) {
+          type = 'underline';
+        } else if (rawClasses.includes('eraser')) {
+          type = 'eraser';
+        } else {
+          type = 'divider';
+        }
+      } else if (tag === 'img') {
+        type    = 'image';
+        content = child.getAttribute('src') || '';
+      }
+
+      const animDuration = computeAnimDuration(type, content, rawClasses);
+      // slotDuration = max(animDuration + settle time, BASE_SEQ_DURATION)
+      // We add 0.5s settle so the element is fully visible before the next one starts.
+      const slotDuration = Math.max(animDuration + 0.5, BASE_SEQ_DURATION);
+
+      elements.push({
+        seqId,
+        type,
+        content,
+        rawClasses,
+        tag,
+        audioSrc:     audioForSeq[seqId] || null,
+        animDuration,   // how long the draw-in animation runs (seconds)
+        slotDuration,   // full slot length incl. settle time (may extend for audio)
+        textContent: child.textContent || '',
+      });
+    });
+
+    console.log(`[configParser] Scene ${sceneId}: ${elements.length} elements ->`, elements.map(e => `[${e.seqId}]${e.type}`).join(', '));
+    scenes.push({
+      sceneId,
+      sceneIndex,
+      elements,
+      startTime: 0, // filled in below
+      endTime:   0,
+      duration:  0,
+    });
+  });
+
+  // Stamp absolute start/end times
+  let cursor = 0;
+  scenes.forEach((scene) => {
+    scene.startTime = cursor;
+    const sceneDuration = scene.elements.reduce(
+      (sum, el) => sum + el.slotDuration, 0
+    );
+    scene.duration  = sceneDuration;
+    scene.endTime   = cursor + sceneDuration;
+    cursor          = scene.endTime;
+    console.log(`[configParser] Scene ${scene.sceneId}: startTime=${scene.startTime} endTime=${scene.endTime} duration=${scene.duration}`);
+  });
+
+  console.log('[configParser] totalDuration:', cursor);
+  return { scenes, totalDuration: cursor };
+}
+
+/**
+ * After audio elements have been preloaded and their durations are known,
+ * update each element's slotDuration to max(BASE_SEQ_DURATION, audioDuration + 0.3).
+ * Returns a new scene graph with updated timestamps.
+ *
+ * @param {Scene[]} scenes
+ * @param {Object.<string, number>} audioDurations  key = audioSrc, value = seconds
+ * @returns {{ scenes: Scene[], totalDuration: number }}
+ */
+export function applyAudioDurations(scenes, audioDurations) {
+  const updated = scenes.map((scene) => ({
+    ...scene,
+    elements: scene.elements.map((el) => {
+      if (!el.audioSrc) return el;
+      const dur = audioDurations[el.audioSrc];
+      if (!dur) return el;
+      return {
+        ...el,
+        // Slot must cover both the typed animation AND the full audio clip
+        slotDuration: Math.max(el.slotDuration, dur + 0.3),
+      };
+    }),
+  }));
+
+  // Recompute absolute times
+  let cursor = 0;
+  updated.forEach((scene) => {
+    scene.startTime = cursor;
+    const sceneDuration = scene.elements.reduce(
+      (sum, el) => sum + el.slotDuration, 0
+    );
+    scene.duration  = sceneDuration;
+    scene.endTime   = cursor + sceneDuration;
+    cursor          = scene.endTime;
+  });
+
+  return { scenes: updated, totalDuration: cursor };
+}
+
+########################################################
+
+  \client\src\engine\constants.js  
+########################################################
+        // ─────────────────────────────────────────────────────────────────────────────
+// GLOBAL ENGINE CONSTANTS
+// All timing, resolution and frame-rate values live here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const FPS      = 60;
+export const CANVAS_W = 1920;
+export const CANVAS_H = 1080;
+
+// Minimum slot length (seconds) — every element gets at least this much time
+// even if its animation finishes faster (gives the viewer a moment to read).
+export const BASE_SEQ_DURATION = 3.0;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// অ্যানিমেশন কনফিগ এক জায়গায় রাখা হলো যাতে speed, wave, noise আলাদা আলাদা
+// renderer ঘেঁটে খুঁজতে না হয়।
+// ─────────────────────────────────────────────────────────────────────────────
+export const ANIMATION_CONFIG = {
+  heading: {
+    speed: {
+      framesPerCharacter: 10,
+      minDuration: 2.8,
+      maxDuration: 10.0,
+    },
+    hand: {
+      waveAmplitude: 9,
+      waveFrequency: 0.32,
+      microNoise: 0.45,
+      offsetX: -20,
+      offsetYRatio: 0.5,
+    },
+  },
+  paragraph: {
+    speed: {
+      framesPerCharacter: 6,
+      minDuration: 4.0,
+      maxDuration: 18.0,
+    },
+    hand: {
+      // paragraph e haat jeno straight line e na jay, tai ekhane wave/arc beshi rakha holo
+      waveAmplitude: 10,
+      waveFrequency: 0.38,
+      microNoise: 0.9,
+      arcAmplitude: 7,
+      offsetX: -30,
+      offsetYRatio: 0.75,
+    },
+  },
+  underline: {
+    speed: {
+      pxPerFrame: 5,
+      minDuration: 2.0,
+      maxDuration: 6.0,
+    },
+    hand: {
+      waveAmplitude: 8,
+      waveFrequency: 1.2,
+      microNoise: 1.2,
+      offsetX: 15,
+      offsetY: -10,
+    },
+  },
+  image: {
+    speed: {
+      fixedDuration: 3.8,
+    },
+    hand: {
+      waveAmplitude: 16,
+      waveFrequency: 0.8,
+      microNoise: 1.5,
+      offsetX: -25,
+      offsetY: 15,
+    },
+  },
+  eraser: {
+    speed: {
+      durationInFrames: 90,
+      speedMultiplier: 0.6,
+      handSweepSpeed: 0.7,
+      handAmplitudeRatio: 0.5,
+    },
+    hand: {
+      scrubFrequency: 1.6,
+      scrubAmplitude: 220,
+      microNoise: 3,
+    },
+  },
+};
+
+export const TYPING_SPEED = {
+  heading: ANIMATION_CONFIG.heading.speed,
+  paragraph: ANIMATION_CONFIG.paragraph.speed,
+  underline: ANIMATION_CONFIG.underline.speed,
+  image: ANIMATION_CONFIG.image.speed,
+};
+
+// পুরোনো renderer/math utils compatibility রাখার জন্য এই object রাখা হয়েছে।
+export const HAND_PHYSICS = {
+  waveFrequency: 0.09,
+  waveAmplitude: 4.2,
+  microFrequency: 0.2,
+  microAmplitude: 1.4,
+  jitterAmount: 0.3,
+  bounceAmplitude: 1.6,
+  liftAmount: -1.2,
+  lateralAmount: 1.6,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HAND IMAGE PATHS — served from client/public/assets/images/hand/
+// ─────────────────────────────────────────────────────────────────────────────
+export const HAND_WRITE_IMG  = '/assets/images/hand/finaHandImg.png';
+export const HAND_ART_IMG    = '/assets/images/hand/finalHandImgArt.png';
+export const HAND_GRIP_IMG   = '/assets/images/hand/finalHandGrip.png';
+export const HAND_ERASER_IMG = '/assets/images/hand/finalHandEraser.png';
+
+// হাতের asset size.
+export const HAND_SIZE = 180;
+
+// পুরোনো code path compatibility.
+export const NIB_Y_RATIO = 0.5;
+
+// nib / hand placement er base offset ekhane centralize kora holo.
+export const NIB_OFFSET = {
+  heading:   { x: ANIMATION_CONFIG.heading.hand.offsetX, y: 8 },
+  paragraph: { x: ANIMATION_CONFIG.paragraph.hand.offsetX, y: 10 },
+  underline: { x: ANIMATION_CONFIG.underline.hand.offsetX, y: ANIMATION_CONFIG.underline.hand.offsetY },
+};
+
+########################################################
+
+  \client\src\engine\frameExporter.js  
+########################################################
+        // ─────────────────────────────────────────────────────────────────────────────
+// FRAME EXPORTER
+// Deterministic, memory-safe, hardware-streaming frame export engine.
+//
+// Strategy
+// ────────
+//  • Caller sets React state for each frame via setCurrentTime().
+//  • We yield 2ms after each setState to let React repaint.
+//  • We serialize the live DOM of the master canvas element using
+//    XMLSerializer → SVG foreignObject → data URI → OffscreenCanvas → JPEG blob.
+//  • Each blob is immediately streamed to disk via the File System Access API.
+//  • Blob is released from scope immediately after write → GC-eligible.
+//  • RAM stays flat regardless of total frame count.
+//
+// Audio synchronization manifest
+// ───────────────────────────────
+//  • buildAudioManifest() returns a JSON file describing every audio cue
+//    (filename + offset in seconds) so the user can cross-check with FFmpeg.
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { FPS, CANVAS_W, CANVAS_H } from './constants.js';
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+export function padNum(n, digits) {
+  return String(n).padStart(digits, '0');
+}
+
+/**
+ * Recursively copy computed styles from a live DOM node into a cloned node.
+ * We copy a focused property set rather than the entire 300+ property CSSStyleDeclaration
+ * to keep the SVG payload small and avoid browser quirks.
+ *
+ * @param {Element} source
+ * @param {Element} target
+ */
+function inlineComputedStyles(source, target) {
+  if (source.nodeType !== 1) return;
+
+  const computed = window.getComputedStyle(source);
+  const PROPS = [
+    'display', 'position', 'top', 'left', 'right', 'bottom',
+    'width', 'height', 'max-width', 'max-height', 'min-width', 'min-height',
+    'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+    'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+    'border', 'border-top', 'border-right', 'border-bottom', 'border-left',
+    'border-radius', 'border-color', 'border-style', 'border-width',
+    'background', 'background-color', 'background-image',
+    'color', 'opacity',
+    'font-family', 'font-size', 'font-weight', 'font-style', 'font-variant',
+    'line-height', 'letter-spacing', 'text-align', 'text-decoration',
+    'white-space', 'word-break', 'overflow-wrap',
+    'transform', 'transform-origin',
+    'flex-direction', 'align-items', 'justify-content', 'flex-wrap', 'flex',
+    'overflow', 'z-index', 'box-sizing',
+    'clip-path', 'object-fit',
+    'vertical-align',
+  ];
+
+  let styleStr = '';
+  PROPS.forEach((p) => {
+    const val = computed.getPropertyValue(p);
+    if (val && val !== 'initial' && val !== '') {
+      styleStr += `${p}:${val};`;
+    }
+  });
+
+  // Append inline style on top so position overrides win
+  target.setAttribute('style', styleStr + (target.getAttribute('style') || ''));
+
+  const srcChildren = source.children;
+  const tgtChildren = target.children;
+  for (let i = 0; i < srcChildren.length; i++) {
+    if (tgtChildren[i]) {
+      inlineComputedStyles(srcChildren[i], tgtChildren[i]);
+    }
+  }
+}
+
+/**
+ * Serialize the live 1920×1080 canvas DOM element to a data URI
+ * via SVG foreignObject.
+ *
+ * @param {HTMLElement} element - the #master-canvas div
+ * @returns {string} data URI
+ */
+function domToSvgDataUri(element) {
+  const clone = element.cloneNode(true);
+
+  // Remove hand cursor images during export (they are part of animation state
+  // that may be mid-frame; cleaner to exclude from frames where rawProgress=1)
+  clone.querySelectorAll('img[alt=""]').forEach((img) => {
+    if (
+      img.src.includes('finaHandImg') ||
+      img.src.includes('finalHandImgArt') ||
+      img.src.includes('finalHandGrip')
+    ) {
+      img.remove();
+    }
+  });
+
+  inlineComputedStyles(element, clone);
+
+  const serializer = new XMLSerializer();
+  const domStr     = serializer.serializeToString(clone);
+
+  const svgStr = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS_W}" height="${CANVAS_H}">`,
+    `<foreignObject width="100%" height="100%">`,
+    domStr,
+    `</foreignObject>`,
+    `</svg>`,
+  ].join('');
+
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgStr)}`;
+}
+
+/**
+ * Paint a data URI into an offscreen 1920×1080 canvas and return a JPEG blob.
+ *
+ * @param {string} dataUri
+ * @returns {Promise<Blob>}
+ */
+function renderToJpegBlob(dataUri) {
+  return new Promise((resolve, reject) => {
+    const img    = new Image();
+    img.onload   = () => {
+      const oc  = new OffscreenCanvas(CANVAS_W, CANVAS_H);
+      const ctx = oc.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      ctx.drawImage(img, 0, 0, CANVAS_W, CANVAS_H);
+      oc.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
+        .then(resolve)
+        .catch(reject);
+    };
+    img.onerror  = () => reject(new Error('SVG image load failed'));
+    img.src      = dataUri;
+  });
+}
+
+/**
+ * Write a Blob to a named file inside a directory handle.
+ *
+ * @param {FileSystemDirectoryHandle} dirHandle
+ * @param {string}                   fileName
+ * @param {Blob}                     blob
+ */
+async function writeBlobToDir(dirHandle, fileName, blob) {
+  const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+  const writable   = await fileHandle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+  // writable and blob fall out of scope here → GC-eligible
+}
+
+// ── Audio Manifest Builder ───────────────────────────────────────────────────
+
+/**
+ * Build a JSON manifest of all audio cues with their absolute timestamps.
+ * Writes audio_manifest.json to the export directory.
+ *
+ * Format:
+ * {
+ *   "fps": 60,
+ *   "cues": [
+ *     { "frame": 120, "timeSeconds": 2.0, "src": "/audio/scene_01_seq_01.mp3" },
+ *     ...
+ *   ]
+ * }
+ *
+ * @param {import('./configParser.js').Scene[]} scenes
+ * @param {FileSystemDirectoryHandle}           dirHandle
+ */
+export async function writeAudioManifest(scenes, dirHandle) {
+  const cues = [];
+  let cursor = 0;
+
+  scenes.forEach((scene) => {
+    scene.elements.forEach((el) => {
+      if (el.audioSrc) {
+        cues.push({
+          frame:       Math.round(cursor * FPS),
+          timeSeconds: parseFloat(cursor.toFixed(4)),
+          src:         el.audioSrc,
+          sceneId:     scene.sceneId,
+          seqId:       el.seqId,
+        });
+      }
+      cursor += el.slotDuration;
+    });
+  });
+
+  const manifest = JSON.stringify({ fps: FPS, cues }, null, 2);
+  const blob     = new Blob([manifest], { type: 'application/json' });
+  await writeBlobToDir(dirHandle, 'audio_manifest.json', blob);
+}
+
+// ── Main Export Loop ─────────────────────────────────────────────────────────
+
+/**
+ * Run the deterministic frame export loop.
+ *
+ * @param {{
+ *   dirHandle:       FileSystemDirectoryHandle,
+ *   canvasEl:        HTMLElement,
+ *   totalDuration:   number,
+ *   scenes:          import('./configParser.js').Scene[],
+ *   setCurrentTime:  (t: number) => void,
+ *   onProgress:      (pct: number, frame: number, total: number) => void,
+ *   onLog:           (msg: string) => void,
+ *   cancelRef:       React.MutableRefObject<boolean>,
+ * }} options
+ *
+ * @returns {Promise<{ framesWritten: number, errors: number }>}
+ */
+export async function runExport({
+  dirHandle,
+  canvasEl,
+  totalDuration,
+  scenes,
+  setCurrentTime,
+  onProgress,
+  onLog,
+  cancelRef,
+}) {
+  const totalFrames = Math.ceil(totalDuration * FPS);
+  let frameIndex    = 0;
+  let errorCount    = 0;
+
+  onLog(`▶ Export started — ${totalFrames} frames @ ${FPS}fps`);
+  onLog(`  Output: ${dirHandle.name}/`);
+  onLog(`  Resolution: ${CANVAS_W}×${CANVAS_H}  JPEG 92%`);
+  onLog('─'.repeat(50));
+
+  // Write audio manifest up-front
+  try {
+    await writeAudioManifest(scenes, dirHandle);
+    onLog('  ✓ audio_manifest.json written');
+  } catch (e) {
+    onLog(`  ⚠ Could not write audio manifest: ${e.message}`);
+  }
+
+  // Yield to browser every BATCH_SIZE frames to keep UI responsive
+  const BATCH_SIZE = 4;
+
+  return new Promise((resolve) => {
+    async function processBatch() {
+      const batchEnd = Math.min(frameIndex + BATCH_SIZE, totalFrames);
+
+      while (frameIndex < batchEnd) {
+        if (cancelRef.current) {
+          onLog('⛔ Export cancelled.');
+          resolve({ framesWritten: frameIndex, errors: errorCount });
+          return;
+        }
+
+        const t = frameIndex / FPS;
+
+        // 1. Force deterministic time
+        setCurrentTime(t);
+
+        // 2. Yield so React repaints
+        await new Promise((r) => setTimeout(r, 2));
+
+        // 3. Serialize DOM → SVG data URI
+        let dataUri;
+        try {
+          dataUri = domToSvgDataUri(canvasEl);
+        } catch (err) {
+          onLog(`  [WARN] Frame ${frameIndex + 1} serialize: ${err.message}`);
+          frameIndex++;
+          errorCount++;
+          continue;
+        }
+
+        // 4. Render to JPEG blob
+        let blob;
+        try {
+          blob = await renderToJpegBlob(dataUri);
+        } catch (err) {
+          onLog(`  [WARN] Frame ${frameIndex + 1} render: ${err.message}`);
+          frameIndex++;
+          errorCount++;
+          continue;
+        }
+
+        // 5. Write to disk
+        const fileName = `frame_${padNum(frameIndex + 1, 5)}.jpg`;
+        try {
+          await writeBlobToDir(dirHandle, fileName, blob);
+        } catch (err) {
+          onLog(`  [ERROR] Write ${fileName}: ${err.message}`);
+          frameIndex++;
+          errorCount++;
+          continue;
+        }
+
+        // 6. Progress update every 60 frames
+        const pct = Math.round(((frameIndex + 1) / totalFrames) * 100);
+        onProgress(pct, frameIndex + 1, totalFrames);
+        if ((frameIndex + 1) % 60 === 0 || frameIndex === totalFrames - 1) {
+          onLog(
+            `  [${padNum(frameIndex + 1, 5)}/${totalFrames}]` +
+            `  t=${t.toFixed(2)}s  ${pct}%`
+          );
+        }
+
+        frameIndex++;
+      }
+
+      if (frameIndex < totalFrames) {
+        // Schedule next batch
+        setTimeout(processBatch, 0);
+      } else {
+        // Done
+        onLog('─'.repeat(50));
+        onLog(
+          errorCount > 0
+            ? `⚠ Done with ${errorCount} error(s). Check log above.`
+            : `✅ Export complete — ${totalFrames} frames written.`
+        );
+        onLog(`  Next: run FFmpeg command shown below.`);
+        resolve({ framesWritten: frameIndex, errors: errorCount });
+      }
+    }
+
+    processBatch();
+  });
+}
+
+########################################################
+
+  \client\src\engine\mathUtils.js  
+########################################################
+        // ─────────────────────────────────────────────────────────────────────────────
+// PURE MATH HELPERS — no React, no DOM, no side-effects
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+export function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+export function easeOutCubic(t) {
+  return 1 - Math.pow(1 - clamp(t, 0, 1), 3);
+}
+
+export function easeInOutQuad(t) {
+  t = clamp(t, 0, 1);
+  return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+}
+
+export function easeOutElastic(t) {
+  t = clamp(t, 0, 1);
+  if (t === 0 || t === 1) return t;
+  return Math.pow(2, -10 * t) * Math.sin((t * 10 - 0.75) * ((2 * Math.PI) / 3)) + 1;
+}
+
+/**
+ * 0..1 progress of a draw-in animation that starts at seqStartTime.
+ * animDuration comes from element.animDuration (computed per-element from
+ * character count in configParser) so the typing speed is always proportional
+ * to how much text there is.
+ *
+ * @param {number} currentTime
+ * @param {number} seqStartTime
+ * @param {number} animDuration  - element.animDuration (seconds)
+ */
+export function animProgress(currentTime, seqStartTime, animDuration) {
+  const elapsed = currentTime - seqStartTime;
+  if (elapsed < 0) return 0;
+  return clamp(elapsed / animDuration, 0, 1);
+}
+
+/**
+ * Compute organic hand wobble for the current frame — humanistic model.
+ *
+ * The model has three layers, all tied to the current character index so
+ * the motion is synchronised with the text being typed rather than running
+ * on a clock that ignores what's on screen:
+ *
+ *  1. WRIST BOUNCE  — a small downward press on every character stroke,
+ *     releasing upward between strokes.  Amplitude is highest mid-word and
+ *     dips at space characters (pen lift / breath).
+ *
+ *  2. DRIFT WAVE  — a slow compound sine that makes the hand drift slightly
+ *     up and down over the course of a line, like a teacher's wrist relaxing.
+ *
+ *  3. MUSCLE TREMOR  — tiny high-frequency random noise on both axes,
+ *     simulating the micro-vibration in a real held pen.
+ *
+ * @param {number}  frame       - render-frame counter (drives drift wave)
+ * @param {object}  physics     - HAND_PHYSICS config
+ * @param {boolean} isActive
+ * @param {number}  charsToShow - current visible char count (drives bounce)
+ * @param {string}  visibleText - the visible text so far (detect word gaps)
+ * @returns {{ wobbleX: number, wobbleY: number }}
+ */
+export function handWobble(frame, physics, isActive, charsToShow = 0, visibleText = '') {
+  if (!isActive) return { wobbleX: 0, wobbleY: 0 };
+
+  const {
+    waveFrequency,
+    waveAmplitude,
+    microFrequency,
+    microAmplitude,
+    jitterAmount,
+    bounceAmplitude = 1,
+    liftAmount = -1,
+    lateralAmount = 1,
+  } = physics;
+
+  const charPhase = (charsToShow % 1) * Math.PI * 2;
+  const bounce = Math.sin(charPhase) * bounceAmplitude;
+
+  const lastChar = visibleText.length > 0 ? visibleText[visibleText.length - 1] : '';
+  const isWordGap = lastChar === ' ' || lastChar === '';
+  const liftOffset = isWordGap ? liftAmount : 0;
+
+  const strokePhase = charsToShow % 1;
+  const strokeArcX = Math.sin((strokePhase - 0.5) * Math.PI) * lateralAmount;
+  const strokeArcY = Math.cos(strokePhase * Math.PI) * (bounceAmplitude * 0.45);
+
+  const wave1 = Math.sin(frame * waveFrequency);
+  const wave2 = Math.cos(frame * (waveFrequency * 0.61));
+  const driftX = (wave1 * 0.55 + wave2 * 0.45) * (lateralAmount * 0.9);
+  const driftY = (wave1 * 0.65 + wave2 * 0.35) * waveAmplitude;
+  const microX = Math.cos(frame * (microFrequency * 0.85)) * (microAmplitude * 0.7);
+  const microY = Math.sin(frame * microFrequency) * microAmplitude;
+
+  const jitterX = (Math.random() - 0.5) * jitterAmount;
+  const jitterY = (Math.random() - 0.5) * jitterAmount;
+
+  return {
+    wobbleX: strokeArcX + driftX + microX + jitterX,
+    wobbleY: strokeArcY + bounce + liftOffset + driftY + microY + jitterY,
+  };
+}
+
+/**
+ * Compute hand position for a typewriter animation using DOM-measured char
+ * positions.
+ *
+ * FIX 1 — SMOOTH MOVEMENT: we receive the continuous float `charsFloat`
+ * (rawProgress * totalChars) rather than Math.floor'd integer so the hand
+ * glides smoothly between character positions instead of teleporting.
+ *
+ * FIX 2 — NIB AT BASELINE: charPos.y is the span's offsetTop (top of the
+ * character box).  We want the pen tip to sit at the baseline:
+ *   hand_img_top = charTop + fontSize - NIB_FROM_TOP
+ *
+ * @param {Array<{x,y,width}>} charPositions
+ * @param {number}  charsFloat    - continuous float (rawProgress * totalChars)
+ * @param {number}  totalChars
+ * @param {number}  containerLeft
+ * @param {number}  containerTop
+ * @param {number}  fontSize
+ * @param {number}  frame
+ * @param {object}  nibOffset     - from NIB_OFFSET config  { x, [yAbs] }
+ * @param {object}  physics
+ * @param {string}  visibleText
+ * @param {number}  nibYRatio   - NIB_Y_RATIO: fontSize multiplier for Y offset
+ */
+export function handPositionFromDom(
+  charPositions,
+  charsFloat,
+  totalChars,
+  containerLeft,
+  containerTop,
+  fontSize,
+  frame,
+  nibOffset,
+  physics,
+  visibleText = '',
+  nibYRatio = 0.55,
+) {
+  let baseX = 0;
+  let baseY = 0;
+
+  if (charPositions.length === totalChars && totalChars > 0) {
+    // Use the continuous float for smooth interpolation
+    const idxF  = Math.min(charsFloat, totalChars - 1);
+    const idx   = Math.floor(idxF);
+    const frac  = idxF - idx;                         // 0..1 within this char
+    const next  = Math.min(idx + 1, totalChars - 1);
+    const c1    = charPositions[idx];
+    const c2    = charPositions[next];
+
+    if (c2 && c1 && c2.y > c1.y) {
+      // Line wrap — blend smoothly: finish current line then jump
+      if (frac < 0.5) {
+        baseX = c1.x;
+        baseY = c1.y;
+      } else {
+        baseX = c2.x - (c2.width || 0);
+        baseY = c2.y;
+      }
+    } else if (c1) {
+      // Normal: interpolate x smoothly between current and next char
+      baseX = c1.x + ((c2 ? c2.x : c1.x) - c1.x) * frac;
+      baseY = c1.y;
+    }
+  }
+
+  const { wobbleX, wobbleY } = handWobble(frame, physics, true, charsFloat, visibleText);
+
+  // hand image top = charTop + fontSize * nibYRatio
+  // NIB_Y_RATIO places the hand so the pen tip sits at the text baseline.
+  const offsetY = fontSize * nibYRatio;
+
+  return {
+    x: containerLeft + baseX + nibOffset.x + wobbleX,
+    y: containerTop  + baseY + offsetY      + wobbleY,
+  };
+}
+
+/**
+ * Fallback hand position (used until DOM positions are first measured).
+ */
+export function handPositionFallback(
+  charIndex, containerW, lineH, fontSize,
+  containerLeft, containerTop,
+  frame, nibOffset, physics,
+  visibleText = '',
+  nibYRatio = 0.55,
+) {
+  const avgCharW     = fontSize * 0.55;
+  const charsPerLine = Math.max(1, Math.floor(containerW / avgCharW));
+  const col          = charIndex % charsPerLine;
+  const row          = Math.floor(charIndex / charsPerLine);
+
+  const baseX = col * avgCharW;
+  const baseY = row * lineH;
+
+  const { wobbleX, wobbleY } = handWobble(frame, physics, true, charIndex, visibleText);
+
+  const offsetY = fontSize * nibYRatio;
+
+  return {
+    x: containerLeft + baseX + nibOffset.x + wobbleX,
+    y: containerTop  + baseY + offsetY      + wobbleY,
+  };
+}
+
+/**
+ * Returns the transform for the art-brush hand revealing an image.
+ * Sweeps diagonally from top-left to bottom-right at given progress (0..1).
+ *
+ * @param {number} progress   - 0..1 reveal ratio
+ * @param {number} imgW
+ * @param {number} imgH
+ * @param {number} frame
+ * @param {object} physics    - HAND_PHYSICS config
+ */
+export function handPositionForImageReveal(progress, imgW, imgH, frame, physics) {
+  const x = progress * imgW;
+  const y = progress * imgH * 0.6;
+
+  const { wobbleX, wobbleY } = handWobble(frame, physics, progress > 0 && progress < 1);
+
+  // Brush angle tilts slightly as it moves
+  const rotate = -25 + progress * 10;
+  return { x: x + wobbleX, y: y + wobbleY, rotate };
+}
+
+########################################################
+
+  \client\src\main.jsx  
+########################################################
+        import React from 'react';
+import { createRoot } from 'react-dom/client';
+import App from './App.jsx';
+
+// StrictMode disabled — the animation engine uses time-based RAF loops
+// and mutable cursor state; double-invoke in dev causes timing artifacts.
+const root = createRoot(document.getElementById('root'));
+root.render(<App />);
+
+########################################################
+
+  \client\src\renderers\EraserRenderer.jsx  
+########################################################
+        import React from 'react';
+import { ANIMATION_CONFIG, CANVAS_W, CANVAS_H, HAND_ERASER_IMG, HAND_SIZE } from '../engine/constants.js';
+
+const WHITE_OVERLAY_SVG = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="none"><rect width="1920" height="1080" fill="#fff" /></svg>',
+)}`;
+
+export default function EraserRenderer({ element, seqStartTime, currentTime, layout }) {
+  const speedMultiplier = ANIMATION_CONFIG.eraser.speed.speedMultiplier || 1;
+  const progress = Math.max(0, Math.min((((currentTime - seqStartTime) * speedMultiplier) / element.animDuration) * 100, 100));
+  if (progress === 0) return null;
+
+  const eraserConfig = ANIMATION_CONFIG.eraser;
+  const frame = Math.round(currentTime * 60);
+  const width = typeof layout.width === 'number' ? layout.width : CANVAS_W;
+  const height = typeof layout.height === 'number' ? layout.height : CANVAS_H;
+  const externalLeft = layout.left || 0;
+  const externalTop = layout.top || 0;
+
+  const travelProgress = progress / 100;
+  const baseHandX = externalLeft + travelProgress * (width - HAND_SIZE);
+  const baseHandY = externalTop + travelProgress * (height - HAND_SIZE);
+  const isWritingActive = progress > 0 && progress < 100;
+
+  const scrubOffset = isWritingActive
+    ? Math.sin(frame * eraserConfig.hand.scrubFrequency) * eraserConfig.hand.scrubAmplitude
+    : 0;
+
+  const handX = baseHandX + scrubOffset;
+  const handY = baseHandY - (scrubOffset * 0.5);
+  const microNoiseX = isWritingActive ? (Math.random() - 0.5) * eraserConfig.hand.microNoise : 0;
+  const microNoiseY = isWritingActive ? (Math.random() - 0.5) * eraserConfig.hand.microNoise : 0;
+
+  let clipPathString = 'polygon(0% 0%, 0% 0%, 0% 0%)';
+  if (progress <= 50) {
+    const p = progress * 2;
+    clipPathString = `polygon(0% 0%, ${p}% 0%, 0% ${p}%)`;
+  } else {
+    const p = (progress - 50) * 2;
+    clipPathString = `polygon(0% 0%, 100% 0%, 100% ${p}%, ${p}% 100%, 0% 100%)`;
+  }
+
+  return (
+    <>
+      <div
+        style={{
+          position: 'absolute',
+          top: `${externalTop}px`,
+          left: `${externalLeft}px`,
+          width: `${width}px`,
+          height: `${height}px`,
+          overflow: 'hidden',
+          clipPath: clipPathString,
+          willChange: 'clip-path',
+          zIndex: 9998,
+        }}
+      >
+        <img
+          src={WHITE_OVERLAY_SVG}
+          alt="Whiteboard Eraser Overlay"
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'fill',
+          }}
+        />
+      </div>
+
+      {isWritingActive && (
+        <img
+          src={HAND_ERASER_IMG}
+          alt="Rubber hand erasing"
+          style={{
+            position: 'absolute',
+            left: `${handX + microNoiseX}px`,
+            top: `${handY + microNoiseY}px`,
+            width: `${HAND_SIZE}px`,
+            zIndex: 9999,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+########################################################
+
+  \client\src\renderers\HeadingRenderer.jsx  
+########################################################
+        import React, { useMemo, useRef, useState, useLayoutEffect } from 'react';
+import { animProgress } from '../engine/mathUtils.js';
+import {
+  ANIMATION_CONFIG,
+  HAND_WRITE_IMG,
+  HAND_SIZE,
+} from '../engine/constants.js';
+import { htmlToReactNodes, flattenNodes } from './textAnimationUtils.js';
+
+function resolveFontStyles({ fontFamily, bold }) {
+  return {
+    fontFamily,
+    fontStyle: 'normal',
+    fontWeight: bold ? 800 : 700,
+  };
+}
+
+export default function HeadingRenderer({ element, seqStartTime, currentTime, layout }) {
+  const { top, left, width, fontSize, color, fontFamily, bold, lineH } = layout;
+  const frame = Math.round(currentTime * 60);
+  const containerRef = useRef(null);
+  const [charPositions, setCharPositions] = useState([]);
+
+  const children = useMemo(() => htmlToReactNodes(element.content), [element.content]);
+  const style = useMemo(() => ({ top: `${top}px`, left: `${left}px`, width: `${width}px` }), [top, left, width]);
+  const animationConfig = ANIMATION_CONFIG.heading.hand;
+  const { fontFamily: resolvedFontFamily, fontStyle, fontWeight } = resolveFontStyles({ fontFamily, bold });
+
+  const flatChars = useMemo(() => flattenNodes(children), [children]);
+  const totalChars = flatChars.length;
+
+  useLayoutEffect(() => {
+    if (!containerRef.current) return;
+    const spans = containerRef.current.querySelectorAll('.live-char');
+    const positions = [];
+
+    spans.forEach((span) => {
+      positions.push({
+        x: span.offsetLeft + span.offsetWidth,
+        y: span.offsetTop,
+        width: span.offsetWidth,
+        height: span.offsetHeight,
+      });
+    });
+
+    if (positions.length > 0) {
+      setCharPositions(positions);
+    }
+  }, [flatChars, totalChars, frame]);
+
+  const adjustedProgress = animProgress(currentTime, seqStartTime, element.animDuration) * 100;
+  const globalCharProgress = (adjustedProgress / 100) * totalChars;
+  const currentCharIndex = Math.min(Math.floor(globalCharProgress), Math.max(totalChars - 1, 0));
+  const charRemainder = globalCharProgress - currentCharIndex;
+  const charsToShow = Math.min(Math.ceil(globalCharProgress), totalChars);
+
+  let handBaseX = 0;
+  let handBaseY = 0;
+
+  if (charPositions.length === totalChars && totalChars > 0) {
+    const c1 = charPositions[currentCharIndex];
+    const c2 = charPositions[Math.min(currentCharIndex + 1, totalChars - 1)];
+
+    if (c2 && c1 && c2.y > c1.y) {
+      handBaseX = charRemainder < 0.1 ? c1.x : c2.x - c2.width;
+      handBaseY = charRemainder < 0.1 ? c1.y : c2.y;
+    } else if (c1) {
+      handBaseX = c1.x + ((c2 ? c2.x : c1.x) - c1.x) * charRemainder;
+      handBaseY = c1.y;
+    }
+  }
+
+  const writeOffsetX = animationConfig.offsetX;
+  const writeOffsetY = fontSize * animationConfig.offsetYRatio;
+
+  const externalLeft = left;
+  const externalTop = top;
+
+  const handX = handBaseX + writeOffsetX + externalLeft;
+  const isWritingActive = adjustedProgress > 0 && adjustedProgress < 100;
+
+  const wave1 = Math.sin(frame * animationConfig.waveFrequency);
+  const wave2 = Math.cos(frame * (animationConfig.waveFrequency * 0.55));
+  const compoundWaveY = isWritingActive
+    ? (wave1 * 0.6 + wave2 * 0.4) * animationConfig.waveAmplitude
+    : 0;
+
+  const humanNoiseX = isWritingActive ? ((Math.random() - 0.5) * animationConfig.microNoise) : 0;
+  const humanNoiseY = isWritingActive ? ((Math.random() - 0.5) * animationConfig.microNoise) : 0;
+
+  const handY = handBaseY + writeOffsetY + compoundWaveY + humanNoiseY + externalTop;
+
+  if (adjustedProgress <= 0) return null;
+
+  return (
+    <>
+      <h1
+        ref={containerRef}
+        style={{
+          position: 'absolute',
+          top: style.top,
+          left: style.left,
+          fontSize: `${fontSize}px`,
+          color,
+          margin: 0,
+          fontFamily: resolvedFontFamily,
+          fontStyle,
+          fontWeight,
+          whiteSpace: 'pre',
+          lineHeight: `${lineH}px`,
+          zIndex: 10,
+          width: style.width,
+        }}
+      >
+        {flatChars.map((item, idx) => {
+          const isVisible = idx < charsToShow;
+          return (
+            <span
+              key={idx}
+              className="live-char"
+              style={{
+                ...item.style,
+                display: 'inline',
+                opacity: isVisible ? 1 : 0,
+              }}
+            >
+              {item.char}
+            </span>
+          );
+        })}
+      </h1>
+
+      {isWritingActive && charPositions.length === totalChars && (
+        <img
+          src={HAND_WRITE_IMG}
+          alt="Hand with pen"
+          style={{
+            position: 'absolute',
+            left: `${handX + humanNoiseX}px`,
+            top: `${handY}px`,
+            width: `${HAND_SIZE}px`,
+            zIndex: 100,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+########################################################
+
+  \client\src\renderers\ImageRenderer.jsx  
+########################################################
+        import React, { useRef } from 'react';
+import { animProgress } from '../engine/mathUtils.js';
+import {
+  ANIMATION_CONFIG,
+  HAND_ART_IMG,
+  HAND_SIZE,
+} from '../engine/constants.js';
+
+export default function ImageRenderer({ element, seqStartTime, currentTime, layout }) {
+  const { top, left, width } = layout;
+  const height = typeof layout.height === 'number' ? layout.height : 450;
+  const frameRef = useRef(0);
+  frameRef.current += 1;
+
+  const progress = animProgress(currentTime, seqStartTime, element.animDuration) * 100;
+  const isWritingActive = progress > 0 && progress < 100;
+  if (progress === 0) return null;
+
+  const imageConfig = ANIMATION_CONFIG.image.hand;
+  const basePathX = (progress / 100) * width;
+  const basePathY = (progress / 100) * height;
+
+  const swingAngle = frameRef.current * (imageConfig.waveFrequency * 0.5625);
+  const swing = Math.sin(swingAngle) * (imageConfig.waveAmplitude * 2.8);
+
+  const handX = basePathX + swing + imageConfig.offsetX + left;
+  const handY = basePathY - swing + imageConfig.offsetY + top;
+
+  const microNoiseX = isWritingActive ? (Math.random() - 0.5) * imageConfig.microNoise : 0;
+  const microNoiseY = isWritingActive ? (Math.random() - 0.5) * imageConfig.microNoise : 0;
+
+  let clipPathString = 'polygon(0% 0%, 0% 0%, 0% 0%)';
+  if (progress <= 50) {
+    const p = progress * 2;
+    clipPathString = `polygon(0% 0%, ${p}% 0%, 0% ${p}%)`;
+  } else {
+    const p = (progress - 50) * 2;
+    clipPathString = `polygon(0% 0%, 100% 0%, 100% ${p}%, ${p}% 100%, 0% 100%)`;
+  }
+
+  return (
+    <>
+      <div
+        style={{
+          position: 'absolute',
+          top: `${top}px`,
+          left: `${left}px`,
+          width: `${width}px`,
+          height: `${height}px`,
+          overflow: 'hidden',
+          clipPath: clipPathString,
+          willChange: 'clip-path',
+        }}
+      >
+        <img
+          src={element.content}
+          alt="scene asset"
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain',
+            display: 'block',
+          }}
+        />
+      </div>
+
+      {isWritingActive && (
+        <img
+          src={HAND_ART_IMG}
+          alt="Hand drawing image"
+          style={{
+            position: 'absolute',
+            left: `${handX + microNoiseX}px`,
+            top: `${handY + microNoiseY}px`,
+            width: `${HAND_SIZE}px`,
+            zIndex: 100,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+########################################################
+
+  \client\src\renderers\ParagraphRenderer.jsx  
+########################################################
+        import React, { useMemo, useRef, useState, useLayoutEffect } from 'react';
+import { animProgress } from '../engine/mathUtils.js';
+import {
+  ANIMATION_CONFIG,
+  HAND_WRITE_IMG,
+  HAND_SIZE,
+} from '../engine/constants.js';
+import { htmlToReactNodes, flattenNodes } from './textAnimationUtils.js';
+
+export default function ParagraphRenderer({ element, seqStartTime, currentTime, layout }) {
+  const { top, left, width, fontSize, color, fontFamily, lineH } = layout;
+  const frame = Math.round(currentTime * 60);
+  const containerRef = useRef(null);
+  const [charPositions, setCharPositions] = useState([]);
+
+  const children = useMemo(() => htmlToReactNodes(element.content), [element.content]);
+  const style = useMemo(() => ({ top: `${top}px`, left: `${left}px`, width: `${width}px` }), [top, left, width]);
+  const animationConfig = ANIMATION_CONFIG.paragraph.hand;
+
+  const flatChars = useMemo(() => flattenNodes(children), [children]);
+  const totalChars = flatChars.length;
+
+  useLayoutEffect(() => {
+    if (!containerRef.current) return;
+    const spans = containerRef.current.querySelectorAll('.live-char');
+    const positions = [];
+
+    spans.forEach((span) => {
+      positions.push({
+        x: span.offsetLeft + span.offsetWidth,
+        y: span.offsetTop,
+        width: span.offsetWidth,
+        height: span.offsetHeight,
+      });
+    });
+
+    if (positions.length > 0) {
+      setCharPositions(positions);
+    }
+  }, [flatChars, totalChars, frame]);
+
+  const adjustedProgress = animProgress(currentTime, seqStartTime, element.animDuration) * 100;
+  if (adjustedProgress === 0) return null;
+
+  const globalCharProgress = (adjustedProgress / 100) * totalChars;
+  const currentCharIndex = Math.min(Math.floor(globalCharProgress), Math.max(totalChars - 1, 0));
+  const charRemainder = globalCharProgress - currentCharIndex;
+  const charsToShow = Math.min(Math.ceil(globalCharProgress), totalChars);
+  let handBaseX = 0;
+  let handBaseY = 0;
+
+  if (charPositions.length === totalChars && totalChars > 0) {
+    const c1 = charPositions[currentCharIndex];
+    const c2 = charPositions[Math.min(currentCharIndex + 1, totalChars - 1)];
+
+    if (c2 && c1 && c2.y > c1.y) {
+      handBaseX = charRemainder < 0.1 ? c1.x : c2.x - c2.width;
+      handBaseY = charRemainder < 0.1 ? c1.y : c2.y;
+    } else if (c1) {
+      handBaseX = c1.x + ((c2 ? c2.x : c1.x) - c1.x) * charRemainder;
+      handBaseY = c1.y;
+    }
+  }
+
+  const writeOffsetX = animationConfig.offsetX;
+  const writeOffsetY = fontSize * animationConfig.offsetYRatio;
+  const externalLeft = left;
+  const externalTop = top;
+
+  const handX = handBaseX + writeOffsetX + externalLeft;
+  const isWritingActive = adjustedProgress > 0 && adjustedProgress < 100;
+  const wave1 = Math.sin(frame * animationConfig.waveFrequency);
+  const wave2 = Math.cos(frame * (animationConfig.waveFrequency * 0.55));
+  const wave3 = Math.sin(frame * (animationConfig.waveFrequency * 0.28));
+  const compoundWaveY = isWritingActive
+    ? ((wave1 * 0.5) + (wave2 * 0.3) + (wave3 * 0.2)) * animationConfig.waveAmplitude
+    : 0;
+  const arcX = isWritingActive ? Math.sin(charRemainder * Math.PI) * animationConfig.arcAmplitude : 0;
+  const swayX = isWritingActive ? Math.sin(frame * (animationConfig.waveFrequency * 0.7)) * (animationConfig.arcAmplitude * 0.45) : 0;
+  const dipY = isWritingActive ? Math.sin(charRemainder * Math.PI) * (animationConfig.waveAmplitude * 0.35) : 0;
+  const humanNoiseX = isWritingActive ? ((Math.random() - 0.5) * animationConfig.microNoise) : 0;
+  const humanNoiseY = isWritingActive ? ((Math.random() - 0.5) * animationConfig.microNoise) : 0;
+
+  const handY = handBaseY + writeOffsetY + compoundWaveY + dipY + humanNoiseY + externalTop;
+
+  return (
+    <>
+      <p
+        ref={containerRef}
+        style={{
+          position: 'absolute',
+          display: 'block',
+          top: style.top,
+          left: style.left,
+          fontSize: `${fontSize}px`,
+          color,
+          fontFamily,
+          margin: 0,
+          lineHeight: `${lineH}px`,
+          width: style.width,
+          wordBreak: 'keep-all',
+          wordWrap: 'break-word',
+        }}
+      >
+        {flatChars.map((item, idx) => {
+          const isVisible = idx < charsToShow;
+
+          let Tag = 'span';
+          if (item.type === 'strong' || item.type === 'b') Tag = 'strong';
+          if (item.type === 'i' || item.type === 'em') Tag = 'i';
+          if (item.type === 'u') Tag = 'u';
+
+          return (
+            <Tag
+              key={idx}
+              className={`live-char ${item.className}`.trim()}
+              style={{
+                ...item.style,
+                display: 'inline',
+                whiteSpace: 'pre-wrap',
+                opacity: isVisible ? 1 : 0,
+              }}
+            >
+              {item.char}
+            </Tag>
+          );
+        })}
+      </p>
+
+      {isWritingActive && charPositions.length === totalChars && (
+        <img
+          src={HAND_WRITE_IMG}
+          alt="Hand with pen"
+          style={{
+            position: 'absolute',
+            left: `${handX + arcX + swayX + humanNoiseX}px`,
+            top: `${handY}px`,
+            width: `${HAND_SIZE}px`,
+            zIndex: 100,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+########################################################
+
+  \client\src\renderers\textAnimationUtils.js  
+########################################################
+        import React from 'react';
+
+export function flattenNodes(children) {
+  const result = [];
+
+  const traverse = (node, inherited = { style: {}, className: '', type: null }) => {
+    if (typeof node === 'string' || typeof node === 'number') {
+      const text = String(node);
+      for (const char of text) {
+        result.push({
+          char,
+          style: inherited.style,
+          className: inherited.className,
+          type: inherited.type,
+        });
+      }
+      return;
+    }
+
+    if (!React.isValidElement(node)) return;
+
+    const nodeProps = node.props || {};
+    const mergedStyle = { ...inherited.style, ...(nodeProps.style || {}) };
+    const mergedClassName = [inherited.className, nodeProps.className].filter(Boolean).join(' ');
+
+    React.Children.forEach(nodeProps.children, (child) => {
+      traverse(child, {
+        style: mergedStyle,
+        className: mergedClassName,
+        type: typeof node.type === 'string' ? node.type : inherited.type,
+      });
+    });
+  };
+
+  React.Children.forEach(children, (child) => traverse(child));
+  return result;
+}
+
+export function htmlToReactNodes(html) {
+  if (!html) return [];
+
+  const template = document.createElement('template');
+  template.innerHTML = html;
+
+  function convert(node, key) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return node.textContent;
+    }
+
+    if (node.nodeType !== Node.ELEMENT_NODE) return null;
+
+    const props = {};
+    if (node.getAttribute('class')) props.className = node.getAttribute('class');
+    if (node.getAttribute('style')) props.style = node.getAttribute('style');
+
+    const children = Array.from(node.childNodes)
+      .map((child, index) => convert(child, `${key}-${index}`))
+      .filter((child) => child !== null);
+
+    return React.createElement(node.tagName.toLowerCase(), { key, ...props }, ...children);
+  }
+
+  return Array.from(template.content.childNodes)
+    .map((child, index) => convert(child, `node-${index}`))
+    .filter((child) => child !== null);
+}
+
+########################################################
+
+  \client\src\renderers\UnderlineRenderer.jsx  
+########################################################
+        import React, { useRef } from 'react';
+import { animProgress, easeOutCubic, handWobble } from '../engine/mathUtils.js';
+import {
+  HAND_PHYSICS,
+  NIB_OFFSET,
+  HAND_WRITE_IMG,
+  HAND_SIZE,
+} from '../engine/constants.js';
+import { underlineColorFromClass } from '../components/SceneRenderer.jsx';
+
+/**
+ * UnderlineRenderer
+ * ─ Draws from scaleX(0) → scaleX(1) left-to-right
+ * ─ Hand image rides the leading edge with compound-wave wobble
+ *
+ * layout = { top, left, width }
+ */
+export default function UnderlineRenderer({ element, seqStartTime, currentTime, layout }) {
+  const { top, left, width } = layout;
+
+  // ── Frame counter ─────────────────────────────────────────────────────────
+  const frameRef = useRef(0);
+  frameRef.current += 1;
+
+  // ── Animation progress — duration computed from bar width in configParser ─
+  const rawProgress = animProgress(currentTime, seqStartTime, element.animDuration);
+  const eased       = easeOutCubic(rawProgress);
+
+  const cls         = element.rawClasses || '';
+  const barColor    = underlineColorFromClass(cls);
+  const isAnimating = rawProgress > 0 && rawProgress < 1;
+
+  // ── Hand position: nib rides right at the drawing tip ────────────────────
+  // currentLineWidth is how far the bar has grown from the left
+  const currentLineWidth = eased * width;
+
+  // Pass eased*100 as a pseudo-charIndex so the underline hand has
+  // the same stroke-rhythm as the text renderers
+  const { wobbleX, wobbleY } = handWobble(
+    frameRef.current, HAND_PHYSICS, isAnimating, eased * 100, '',
+  );
+
+  const handX = left + currentLineWidth + NIB_OFFSET.underline.x + wobbleX;
+  const handY = top + NIB_OFFSET.underline.y + wobbleY;
+
+  return (
+    <>
+      {/* The underline bar — grows from left via scaleX */}
+      <div
+        style={{
+          position:        'absolute',
+          top:             `${top}px`,
+          left:            `${left}px`,
+          width:           `${width}px`,
+          height:          '6px',
+          transformOrigin: 'left center',
+          transform:       `scaleX(${eased})`,
+          background:      barColor,
+          borderRadius:    '3px',
+          overflow:        'visible',
+        }}
+      />
+
+      {/* Writing hand rides the leading edge */}
+      {isAnimating && (
+        <img
+          src={HAND_WRITE_IMG}
+          alt=""
+          style={{
+            position:      'absolute',
+            left:          `${handX}px`,
+            top:           `${handY}px`,
+            width:         `${HAND_SIZE}px`,
+            height:        'auto',
+            transform:     'rotate(-8deg)',
+            pointerEvents: 'none',
+            zIndex:        100,
+            filter:        'drop-shadow(1px 2px 3px rgba(0,0,0,0.18))',
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+########################################################
+
+  \client\src\styles\master.css  
+########################################################
+        /* ==========================================================================
+   🎯 WHITEBOARD ENGINE - MEGA TAILWIND-STYLE UTILITY LIBRARY
+   ========================================================================== */
+
+/* --------------------------------------------------
+   🎨 1. TEXT COLORS (মার্কার ও ক্যালিগ্রাফি শেডস)
+   -------------------------------------------------- */
+.text-black        { color: #000000; }
+.text-white        { color: #ffffff; }
+.text-gray         { color: #4b5563; } /* Gray-600 */
+.text-light-gray   { color: #9ca3af; } /* Gray-400 */
+
+/* ব্রাইট মার্কার কালারস */
+.text-red          { color: #e11d48; } /* Rose-600 */
+.text-blue         { color: #1d4ed8; } /* Blue-700 */
+.text-cyan         { color: #0284c7; } /* Sky-600 */
+.text-green        { color: #10b981; } /* Emerald-500 */
+.text-emerald      { color: #047857; } /* Emerald-700 */
+.text-purple       { color: #7e22ce; } /* Purple-700 */
+.text-fuchsia      { color: #c026d3; } /* Fuchsia-600 */
+.text-pink         { color: #db2777; } /* Pink-600 */
+.text-orange       { color: #ea580c; } /* Orange-600 */
+.text-yellow       { color: #d97706; } /* Amber-600 */
+
+/* --------------------------------------------------
+   🎨 2. BACKGROUND COLORS (বোর্ড ও কন্টেইনার শেডস)
+   -------------------------------------------------- */
+.bg-black          { background-color: #000000; }
+.bg-white          { background-color: #ffffff; }
+.bg-gray-50        { background-color: #f9fafb; }
+.bg-gray-100       { background-color: #f3f4f6; }
+
+/* সলিড লাইট ব্যাকগ্রাউন্ড */
+.bg-red            { background-color: #ffe4e6; } /* Rose-100 */
+.bg-blue           { background-color: #dbeafe; } /* Blue-100 */
+.bg-cyan           { background-color: #e0f2fe; } /* Sky-100 */
+.bg-green          { background-color: #d1fae5; } /* Emerald-100 */
+.bg-purple         { background-color: #f3e8ff; } /* Purple-100 */
+.bg-orange         { background-color: #ffedd5; } /* Orange-100 */
+.bg-yellow         { background-color: #fef9c3; } /* Yellow-100 */
+
+/* --------------------------------------------------
+   ✒️ 3. FONT SIZE UTILITIES (ডাইনামিক টেক্সট স্কেলিং ক্লাস)
+   -------------------------------------------------- */
+.text-xs    { font-size: 16px; }
+.text-sm    { font-size: 20px; }
+.text-base  { font-size: 24px; }
+.text-lg    { font-size: 28px; }
+.text-xl    { font-size: 32px; }
+.text-2xl   { font-size: 38px; }
+.text-3xl   { font-size: 45px; }
+.text-4xl   { font-size: 52px; }  /* স্ট্যান্ডার্ড প্যারাগ্রাফ সাইজ */
+.text-5xl   { font-size: 64px; }  /* সাব-হেডিং সাইজ */
+.text-6xl   { font-size: 75px; }  /* নরমাল হেডিং সাইজ */
+.text-7xl   { font-size: 85px; }  
+.text-8xl   { font-size: 95px; }  /* আপনার মেগা হেডিং সাইজ (১০০% লক) */
+.text-9xl   { font-size: 110px; }
+
+/* ==========================================================================
+   📌 4. TOP & LEFT POSITIONING CLASSES (Extended Resolution Grid Lock)
+   ========================================================================== */
+
+/* --------------------------------------------------
+   🔽 --- TOP POSITIONS (0px to 1000px+) ---
+   -------------------------------------------------- */
+.top-0     { top: 0px; }
+.top-5     { top: 5px; }
+.top-10    { top: 10px; }
+.top-15    { top: 15px; }
+.top-20    { top: 20px; }
+.top-25    { top: 25px; }
+.top-30    { top: 30px; }
+.top-35    { top: 35px; }
+.top-40    { top: 40px; }
+.top-45    { top: 45px; }
+.top-50    { top: 50px; }
+.top-60    { top: 60px; }
+.top-70    { top: 70px; }
+.top-80    { top: 80px; }   /* আপনার হেডিংয়ের পারফেক্ট বেস টপ */
+.top-90    { top: 90px; }
+.top-100   { top: 100px; }
+.top-110   { top: 110px; }
+.top-120   { top: 120px; }
+.top-130   { top: 130px; }
+.top-140   { top: 140px; }
+.top-150   { top: 150px; }
+.top-160   { top: 160px; }
+.top-170   { top: 170px; }
+.top-180   { top: 180px; }
+.top-190   { top: 190px; }
+.top-200   { top: 200px; }  /* আন্ডারলাইন ও ২য় লাইনের বেস টপ */
+.top-210   { top: 210px; }
+.top-220   { top: 220px; }
+.top-230   { top: 230px; }
+.top-240   { top: 240px; }
+.top-250   { top: 250px; }
+.top-260   { top: 260px; }
+.top-270   { top: 270px; }
+.top-280   { top: 280px; }
+.top-290   { top: 290px; }
+.top-300   { top: 300px; }
+
+/* ৫০ পিক্সেল গ্যাপে মেগা স্ক্রিন টপ স্কেলিং */
+.top-350   { top: 350px; }
+.top-400   { top: 400px; }
+.top-450   { top: 450px; }
+.top-500   { top: 500px; }
+.top-550   { top: 550px; }
+.top-600   { top: 600px; }
+.top-650   { top: 650px; }
+.top-700   { top: 700px; }
+.top-750   { top: 750px; }
+.top-800   { top: 800px; }
+.top-850   { top: 850px; }
+.top-900   { top: 900px; }
+.top-950   { top: 950px; }
+.top-1000  { top: 1000px; }
+.top-1100  { top: 1100px; }
+.top-1200  { top: 1200px; }
+
+/* --------------------------------------------------
+   ▶️ --- LEFT POSITIONS (0px to 1500px+) ---
+   -------------------------------------------------- */
+.left-0     { left: 0px; }
+.left-5     { left: 5px; }
+.left-10    { left: 10px; }
+.left-15    { left: 15px; }
+.left-20    { left: 20px; }
+.left-25    { left: 25px; }
+.left-30    { left: 30px; }
+.left-35    { left: 35px; }
+.left-40    { left: 40px; }
+.left-45    { left: 45px; }
+.left-50    { left: 50px; }
+.left-60    { left: 60px; }
+.left-70    { left: 70px; }
+.left-80    { left: 80px; }
+.left-90    { left: 90px; }
+.left-100   { left: 100px; } /* আপনার মেইন কনটেন্টের পারফেক্ট বাম মার্জিন */
+.left-110   { left: 110px; }
+.left-120   { left: 120px; }
+.left-130   { left: 130px; }
+.left-140   { left: 140px; }
+.left-150   { left: 150px; }
+.left-160   { left: 160px; }
+.left-170   { left: 170px; }
+.left-180   { left: 180px; }
+.left-190   { left: 190px; }
+.left-200   { left: 200px; }
+.left-220   { left: 220px; }
+.left-240   { left: 240px; }
+.left-250   { left: 250px; }
+.left-260   { left: 260px; }
+.left-280   { left: 280px; }
+.left-300   { left: 300px; }
+
+/* ৫০ পিক্সেল গ্যাপে ফুল এইচডি হরিজন্টাল লেফট স্কেলিং */
+.left-350   { left: 350px; }
+.left-400   { left: 400px; }
+.left-450   { left: 450px; }
+.left-500   { left: 500px; }
+.left-550   { left: 550px; }
+.left-600   { left: 600px; }
+.left-650   { left: 650px; }
+.left-700   { left: 700px; }
+.left-750   { left: 750px; }
+.left-800   { left: 800px; }
+.left-850   { left: 850px; }
+.left-900   { left: 900px; }
+.left-950   { left: 950px; }
+.left-1000  { left: 1000px; }
+.left-1100  { left: 1100px; }
+.left-1200  { left: 1200px; }
+.left-1300  { left: 1300px; }
+.left-1400  { left: 1400px; }
+.left-1500  { left: 1500px; }
+
+/* --------------------------------------------------
+   💛 5. HIGHLIGHT VARIETIES (রিয়েল টেক্সট মার্কার ভ্যারাইটি)
+   -------------------------------------------------- */
+/* --- লাইট/প্যাস্টেল শেডস (আপনার আগেরগুলো) --- */
+.highlight-yellow   { background-color: #fef08a; border-radius: 4px; padding: 0px 6px; } 
+.highlight-purple   { background-color: #e9d5ff; border-radius: 4px; padding: 0px 6px; } 
+.highlight-green    { background-color: #a7f3d0; border-radius: 4px; padding: 0px 6px; } 
+.highlight-blue     { background-color: #bfdbfe; border-radius: 4px; padding: 0px 6px; } 
+.highlight-orange   { background-color: #ffedd5; border-radius: 4px; padding: 0px 6px; } 
+.highlight-pink     { background-color: #fbcfe8; border-radius: 4px; padding: 0px 6px; } 
+.highlight-cyan     { background-color: #bae6fd; border-radius: 4px; padding: 0px 6px; } 
+
+/* 🔥 --- নতুন মেগা ডিপ হাইলাইটার কালেকশন (Deep & High-Contrast) --- */
+.highlight-deep-red {
+  background-color: #be123c; /* Rose-700 */
+  color: #ffffff !important;  /* ডিপ কালারে লেখা অটোমেটিক সাদা হয়ে ফুটবে */
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-blue {
+  background-color: #1d4ed8; /* Blue-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-green {
+  background-color: #047857; /* Emerald-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-purple {
+  background-color: #6b21a8; /* Purple-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-orange {
+  background-color: #c2410c; /* Orange-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-pink {
+  background-color: #be185d; /* Pink-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-cyan {
+  background-color: #0369a1; /* Sky-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-yellow {
+  background-color: #b45309; /* Amber-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+
+
+/* --------------------------------------------------
+   🔴 6. UNDERLINE STYLES (মাল্টি-কালার মার্কার ও চকবোর্ড স্ট্রোক)
+   -------------------------------------------------- */
+
+/* --- 🔹 ক) সলিড ৪ পিক্সেল স্ট্যান্ডার্ড আন্ডারলাইন --- */
+u {
+   text-decoration: none;
+}
+.underline-red          { border-bottom: 4px solid #e11d48; } /* Rose-600 */
+.underline-blue         { border-bottom: 4px solid #1d4ed8; } /* Blue-700 */
+.underline-green        { border-bottom: 4px solid #10b981; } /* Emerald-500 */
+.underline-black        { border-bottom: 4px solid #000000; }
+.underline-purple       { border-bottom: 4px solid #7e22ce; } /* Purple-700 */
+.underline-orange       { border-bottom: 4px solid #ea580c; } /* Orange-600 */
+.underline-cyan         { border-bottom: 4px solid #0284c7; } /* Sky-600 */
+.underline-fuchsia      { border-bottom: 4px solid #c026d3; } /* Fuchsia-600 */
+.underline-pink         { border-bottom: 4px solid #db2777; } /* Pink-600 */
+.underline-yellow       { border-bottom: 4px solid #d97706; } /* Amber-600 */
+.underline-lime         { border-bottom: 4px solid #65a30d; } /* Lime-600 */
+
+/* --- 🔹 খ) ডাবল স্ট্রোক আন্ডারলাইন (মেগা হাই-কন্ট্রাস্ট) --- */
+.underline-double-red     { border-bottom: 5px double #e11d48; }
+.underline-double-blue    { border-bottom: 5px double #1d4ed8; }
+.underline-double-green   { border-bottom: 5px double #10b981; }
+.underline-double-black   { border-bottom: 5px double #000000; }
+.underline-double-purple  { border-bottom: 5px double #7e22ce; }
+.underline-double-cyan    { border-bottom: 5px double #0284c7; }
+.underline-double-fuchsia { border-bottom: 5px double #c026d3; }
+.underline-double-orange  { border-bottom: 5px double #ea580c; }
+
+/* --- 🔹 গ) ড্যাশড (Dashed) স্ট্রোক কালেকশন --- */
+.underline-dashed-red     { border-bottom: 3px dashed #e11d48; }
+.underline-dashed-blue    { border-bottom: 3px dashed #1d4ed8; }
+.underline-dashed-green   { border-bottom: 3px dashed #10b981; }
+.underline-dashed-black   { border-bottom: 3px dashed #000000; }
+.underline-dashed-purple  { border-bottom: 3px dashed #7e22ce; }
+.underline-dashed-cyan    { border-bottom: 3px dashed #0284c7; }
+
+/* --- 🔹 ঘ) ডটেড (Dotted) মার্কার ট্রেইলস (নতুন) --- */
+.underline-dotted-red     { border-bottom: 4px dotted #e11d48; }
+.underline-dotted-blue    { border-bottom: 4px dotted #1d4ed8; }
+.underline-dotted-green   { border-bottom: 4px dotted #10b981; }
+.underline-dotted-black   { border-bottom: 4px dotted #000000; }
+.underline-dotted-purple  { border-bottom: 4px dotted #7e22ce; }
+.underline-dotted-fuchsia { border-bottom: 4px dotted #c026d3; }
+
+/* --- 🔹 ঙ) আল্ট্রা-থিক থিকনেস মেগা স্ট্রোক (6px - হেডিং বা বোল্ড টেক্সটের নিচে দেওয়ার জন্য) --- */
+.underline-thick-red      { border-bottom: 6px solid #e11d48; }
+.underline-thick-blue     { border-bottom: 6px solid #1d4ed8; }
+.underline-thick-green    { border-bottom: 6px solid #10b981; }
+.underline-thick-purple   { border-bottom: 6px solid #7e22ce; }
+.underline-thick-yellow   { border-bottom: 6px solid #d97706; }
+
+
+
+/* --------------------------------------------------
+   ✒️ 7. FONT STYLES & WEIGHTS
+   -------------------------------------------------- */
+.bold, .font-bold { font-weight: 700; }
+.italic           { font-style: italic; }
+.font-normal      { font-weight: 400; }
+
+/* --------------------------------------------------
+   📍 8. POSITIONING SYSTEM (আপনার ইঞ্জিনের মেইন চাবি)
+   -------------------------------------------------- */
+.absolute { position: absolute; }
+.relative { position: relative; }
+.static   { position: static; }
+.fixed   { position: fixed; }
+
+/* --------------------------------------------------
+   📦 9. PADDING UTILITIES (P)
+   -------------------------------------------------- */
+.p-0 { padding: 0px; }
+.p-1 { padding: 4px; }
+.p-2 { padding: 8px; }
+.p-3 { padding: 12px; }
+.p-4 { padding: 16px; }
+.p-5 { padding: 20px; }
+
+/* Horizontal (Left-Right) Padding */
+.px-1 { padding-left: 4px; padding-right: 4px; }
+.px-2 { padding-left: 8px; padding-right: 8px; }
+.px-3 { padding-left: 12px; padding-right: 12px; }
+.px-4 { padding-left: 16px; padding-right: 16px; }
+
+/* Vertical (Top-Bottom) Padding */
+.py-1 { padding-top: 4px; padding-bottom: 4px; }
+.py-2 { padding-top: 8px; padding-bottom: 8px; }
+.py-3 { padding-top: 12px; padding-bottom: 12px; }
+.py-4 { padding-top: 16px; padding-bottom: 16px; }
+
+/* --------------------------------------------------
+   📦 10. MARGIN UTILITIES (M)
+   -------------------------------------------------- */
+.m-0 { margin: 0px; }
+.m-1 { margin: 4px; }
+.m-2 { margin: 8px; }
+.m-3 { margin: 12px; }
+.m-4 { margin: 16px; }
+.mx-auto { margin-left: auto; margin-right: auto; }
+
+
+
+/* ==========================================================================
+   🔳 11. BORDERS & RADIUS - Mega Style & Thickness Grid
+   ========================================================================== */
+
+/* --- 🔹 ক) বর্ডার থিকনেস (Border Thickness) --- */
+.border-0 { border-width: 0px; }
+.border   { border: 2px solid #e5e7eb; } /* ডিফল্ট টেলউইন্ড স্টাইল */
+.border-1 { border-width: 1px; }
+.border-2 { border-width: 2px; }
+.border-3 { border-width: 3px; }
+.border-4 { border-width: 4px; }
+.border-6 { border-width: 6px; }
+.border-8 { border-width: 8px; } /* হোয়াইটবোর্ড মেগা ফ্রেমের জন্য */
+
+/* --- 🔹 খ) বর্ডার কালারস (Border Colors) --- */
+.border-black        { border-color: #000000; }
+.border-white        { border-color: #ffffff; }
+.border-gray         { border-color: #9ca3af; } /* Gray-400 */
+.border-red          { border-color: #e11d48; } /* Rose-600 */
+.border-blue         { border-color: #1d4ed8; } /* Blue-700 */
+.border-green        { border-color: #10b981; } /* Emerald-500 */
+.border-purple       { border-color: #7e22ce; } /* Purple-700 */
+.border-orange       { border-color: #ea580c; } /* Orange-600 */
+.border-cyan         { border-color: #0284c7; } /* Sky-600 */
+.border-fuchsia      { border-color: #c026d3; } /* Fuchsia-600 */
+.border-pink         { border-color: #db2777; } /* Pink-600 */
+.border-yellow       { border-color: #d97706; } /* Amber-600 */
+
+/* --- 🔹 গ) বর্ডার স্টাইলস (Border Styles) --- */
+.border-solid        { border-style: solid; }
+.border-dashed       { border-style: dashed; }
+.border-dotted       { border-style: dotted; }
+.border-double       { border-style: double; }
+
+/* --- 🔹 ঘ) রেডিমেড শর্টকাট কম্বিনেশন (Quick Utilities) --- */
+.border-dashed-blue  { border: 3px dashed #1d4ed8; }
+.border-dashed-red   { border: 3px dashed #e11d48; }
+.border-dashed-green { border: 3px dashed #10b981; }
+.border-double-black { border: 5px double #000000; }
+
+/* --- 🔹 ঙ) বর্ডার রেডিয়াস (Border Radius) --- */
+.rounded-none { border-radius: 0px; }
+.rounded-sm   { border-radius: 2px; }
+.rounded      { border-radius: 4px; }
+.rounded-md   { border-radius: 6px; }
+.rounded-lg   { border-radius: 8px; }
+.rounded-xl   { border-radius: 12px; }
+.rounded-2xl  { border-radius: 16px; }
+.rounded-3xl  { border-radius: 24px; }
+.rounded-full { border-radius: 9999px; }
+
+
+/* ==========================================================================
+   📐 12. WIDTH & HEIGHT UTILITIES (Image & Container Dimension Scale)
+   ========================================================================== */
+
+/* --- 🔹 ক) উইডথ স্কেলিং ক্লাস (Width Classes) --- */
+.w-auto   { width: auto; }
+.w-full   { width: 100%; }
+
+/* ১০px থেকে ১০০px (ছোট আইকন বা লোগোর জন্য ১০ পিক্সেল গ্যাপে) */
+.w-10    { width: 10px; }
+.w-20    { width: 20px; }
+.w-30    { width: 30px; }
+.w-40    { width: 40px; }
+.w-50    { width: 50px; }
+.w-60    { width: 60px; }
+.w-70    { width: 70px; }
+.w-80    { width: 80px; }
+.w-90    { width: 90px; }
+.w-100   { width: 100px; }
+
+/* ১২০px থেকে ৪০০px (ইমেজ এবং কার্ডের জন্য ২০ পিক্সেল গ্যাপে) */
+.w-120   { width: 120px; }
+.w-140   { width: 140px; }
+.w-160   { width: 160px; }
+.w-180   { width: 180px; }
+.w-200   { width: 200px; }
+.w-220   { width: 220px; }
+.w-240   { width: 240px; }
+.w-260   { width: 260px; }
+.w-280   { width: 280px; }
+.w-300   { width: 300px; }
+.w-320   { width: 320px; }
+.w-340   { width: 340px; }
+.w-360   { width: 360px; }
+.w-380   { width: 380px; } /* আপনার ১ম ও ২য় ইমেজের নিখুঁত উইডথ (৩৮০px লক) */
+.w-400   { width: 400px; }
+
+/* ৪৫০px থেকে ৮০০px+ (মেগা বক্স বা চকবোর্ড সেকশনের জন্য ৫০ পিক্সেল গ্যাপে) */
+.w-450   { width: 450px; }
+.w-500   { width: 500px; }
+.w-550   { width: 550px; }
+.w-600   { width: 600px; }
+.w-650   { width: 650px; }
+.w-700   { width: 700px; }
+.w-750   { width: 750px; }
+.w-800   { width: 800px; }
+.w-900   { width: 900px; }
+.w-1000  { width: 1000px; }
+.w-1100  { width: 1100px; }
+.w-1200  { width: 1200px; }
+.w-1250  { width: 1250px; }
+.w-1300  { width: 1300px; }
+.w-1350  { width: 1350px; }
+.w-1400  { width: 1400px; }
+.w-1450  { width: 1450px; }
+.w-1500  { width: 1500px; }
+.w-1550  { width: 1550px; }
+.w-1600  { width: 1600px; }
+.w-1650  { width: 1650px; }
+.w-1700  { width: 1700px; }
+.w-1750  { width: 1750px; }
+.w-1800  { width: 1800px; }
+.w-1850  { width: 1850px; }
+.w-1900  { width: 1900px; }
+.w-1350  { width: 1350px; }
+.w-1400  { width: 1400px; }
+.w-1450  { width: 1450px; }
+.w-1500  { width: 1500px; }
+.w-1550  { width: 1550px; }
+.w-1600  { width: 1600px; }
+.w-1650  { width: 1650px; }
+.w-1700  { width: 1700px; }
+.w-1750  { width: 1750px; }
+.w-1800  { width: 1800px; }
+.w-1850  { width: 1850px; }
+.w-1900  { width: 1900px; }
+.w-1920  { width: 1920px; }
+
+
+/* --- 🔹 খ) হাইট স্কেলিং ক্লাস (Height Classes) --- */
+.h-auto   { height: auto; }
+.h-full   { height: 100%; }
+
+/* ১০px থেকে ১০০px */
+.h-10    { height: 10px; }
+.h-20    { height: 20px; }
+.h-30    { height: 30px; }
+.h-40    { height: 40px; }
+.h-50    { height: 50px; }
+.h-60    { height: 60px; }
+.h-70    { height: 70px; }
+.h-80    { height: 80px; }
+.h-90    { height: 90px; }
+.h-100   { height: 100px; }
+
+/* ১২০px থেকে ৪০০px */
+.h-120   { height: 120px; }
+.h-140   { height: 140px; }
+.h-160   { height: 160px; }
+.h-180   { height: 180px; }
+.h-200   { height: 200px; }
+.h-220   { height: 220px; }
+.h-240   { height: 240px; }
+.h-260   { height: 260px; }
+.w-280   { width: 280px; }
+.h-300   { height: 300px; }
+.h-320   { height: 320px; }
+.h-340   { height: 340px; }
+.h-360   { height: 360px; }
+.h-380   { height: 380px; } /* আপনার ইমেজের নিখুঁত হাইট (৩৮০px লক) */
+.h-400   { height: 400px; }
+
+/* ৪৫০px থেকে ৮০০px+ */
+.h-450   { height: 450px; }
+.h-500   { height: 500px; }
+.h-550   { height: 550px; }
+.h-600   { height: 600px; }
+.h-650   { height: 650px; }
+.h-700   { height: 700px; }
+.h-750   { height: 750px; }
+.h-800   { height: 800px; }
+.h-850   { height: 850px; }
+.h-900   { height: 900px; }
+.h-950   { height: 950px; }
+.h-1000   { height: 1000px; }
+.h-1050   { height: 1050px; }
+.h-1100   { height: 1100px; }
+.h-1150   { height: 1150px; }
+.h-1200   { height: 1200px; }
+.h-1250   { height: 1250px; }
+
+/* --------- Most important css ------------- */
+
+/* --- 🖼️ 🔹 OBJECT FIT UTILITIES (ইমেজ ফিটিং ম্যাজিক) --- */
+.object-contain {
+  object-fit: contain; /* ইমেজের রেশিও ঠিক রেখে ফ্রেমের ভেতর পুরোটা দেখাবে */
+}
+
+.object-cover {
+  object-fit: cover; /* ফ্রেম জুটিয়ে ইমেজ বসিয়া দেবে, কোনো কোণা ফাঁকা থাকবে না */
+}
+
+.object-fill {
+  object-fit: fill; /* ইমেজকে জোর করে টেনে-হিঁচড়ে ফ্রেমের সাইজে ফিট করাবে */
+}
+
+/* ==========================================================================
+   🔤 13. INTERESTING HANDWRITING & TEACHING FONTS  GOOGLE FONTS IMPORT (হ্যান্ডরাইটিং ও টিচিং অ্যানিমেশন স্পেশাল)
+   ========================================================================== */
+
+/* ১. Kalam: একদম খাঁটি রিয়েলিস্টিক মার্কার পেন বা বলপেন রাইটিং ফিল (হোয়াইটবোর্ডের রাজা) */
+.font-kalam { font-family: 'Kalam', cursive, sans-serif; }
+
+/* ২. Caveat: একটু স্টাইলিশ রানিং হ্যান্ডরাইটিং বা সিগনেচার স্টাইল */
+.font-caveat { font-family: 'Caveat', cursive, sans-serif; }
+
+/* ৩. Patrick Hand: বাচ্চাদের ক্লাসরুম বা কমিক বুক টিচিং স্টাইলের নিখুঁত ফন্ট */
+.font-patrick { font-family: 'Patrick Hand', cursive, sans-serif; }
+
+/* ৪. Architects Daughter: একদম আর্কিটেক্টদের ড্রয়িং শিটের মতো ক্রিস্প অ্যান্ড শার্প হ্যান্ডরাইটিং */
+.font-architect { font-family: 'Architects Daughter', cursive, sans-serif; }
+
+/* ৫. Delius: একদম গোল গোল, পরিষ্কার ও মার্জিত স্কুলবুক ক্যালিগ্রাফি */
+.font-delius { font-family: 'Delius', cursive, sans-serif; }
+
+/* ৬. Fredoka: বোল্ড হেডিং-এর জন্য কিউট ও গোলগাল রাউন্ডেড ফন্ট (চকবোর্ড লুকের জন্য বেস্ট) */
+.font-fredoka { font-family: 'Fredoka', sans-serif; }
+
+/* ৭. Comfortaa: মডার্ন টেকনিক্যাল স্লাইড ও ক্রিস্প রিডেবিলিটির জন্য চমৎকার জ্যামিতিক ফন্ট */
+.font-comfortaa { font-family: 'Comfortaa', sans-serif; }
+
+/* ৮. Shadow Into Light: একদম চিকন কলমে ঝটপট লেখা ক্যাজুয়াল ডায়েরি হ্যান্ডরাইটিং ফিল */
+.font-shadow { font-family: 'Shadows Into Light', cursive, sans-serif; }
+
+/* ৯. Amatic SC: অল-ক্যাপস (সব বড় হাতের) আর্ট স্টাইল ফন্ট, কমিক বা ইনফোগ্রাফিক হেডিংয়ের জন্য জোস */
+.font-amatic { font-family: 'Amatic SC', cursive, sans-serif; }
+
+/* ১০. Permanent Marker: থিক স্কেচ পেন বা মোটা মার্কার দিয়ে বোর্ডে হাইলাইট করার ম্যাসসিভ ফন্ট */
+.font-marker { font-family: 'Permanent Marker', cursive, sans-serif; }
+
+/* ১১. Indie Flower: একটু গোলগাল, বাবলি এবং অত্যন্ত কিউট ও ফ্রেন্ডলি হাতের লেখা */
+.font-indie { font-family: 'Indie Flower', cursive, sans-serif; }
+
+/* ১২. Just Another Hand: একদম খাড়া খাড়া, চিকন ও লম্বাটে ক্যারেক্টার—রিয়েল চকবোর্ড রাফ নোটের ফিল দেয় */
+.font-another-hand { font-family: 'Just Another Hand', cursive, sans-serif; }
+
+/* ১৩. Rock Salt: একদম কাঁচা হাতের স্ক্র্যাচ বা চকের ড্রয়িং লুক (হেডিং বা কোনো কিছু কেটে দেওয়ার স্টাইলে দারুণ) */
+.font-rock-salt { font-family: 'Rock Salt', cursive, sans-serif; }
+
+/* ১৪. Quicksand: স্লাইডের টেকনিক্যাল কোড এক্সপ্লেনেশন বা সাব-টেক্সটের জন্য সুপার-ক্লিন রাউন্ডেড জ্যামিতিক ফন্ট */
+.font-quicksand { font-family: 'Quicksand', sans-serif; }
+
+/* ১৫. Pangolin: খুব সুন্দর, সমান এবং অত্যন্ত রিডেবল টিচিং নোটবুক ফন্ট */
+.font-pangolin { font-family: 'Pangolin', cursive, sans-serif; }
+
+
+/*ভিডিওর মেইন হেডিং: .font-marker (মোটা মার্কার ফিল) অথবা .font-amatic (আর্ট লুকে বড় করে দেখানোর জন্য)।
+
+প্যারাগ্রাফ বা রেগুলার টিচিং: .font-pangolin বা .font-indie (এগুলো চোখের জন্য খুব সুদিং এবং রেন্ডার হওয়ার পর একদম খাতার লেখার মতো খোলে)।
+
+চকবোর্ড বা সাইড নোট: .font-another-hand বা .font-shadow (একদম রিয়েল টাইম ক্লাসরুমের রাফ ড্রাফটের ভাইব দেবে)।
+*/
+
+
+/* ==========================================================================
+   層 14. Z-INDEX LAYERING UTILITIES (লেআউটের ওভারল্যাপ কন্ট্রোল)
+   ========================================================================== */
+.z-auto  { z-index: auto; }
+.z-0     { z-index: 0; }
+.z-1     { z-index: 1; }
+.z-2     { z-index: 2; }
+.z-5     { z-index: 5; }
+.z-10    { z-index: 10; }  /* সাধারণত টেক্সট বা ব্যাকগ্রাউন্ড বক্সের জন্য */
+.z-20    { z-index: 20; }
+.z-30    { z-index: 30; }
+.z-40    { z-index: 40; }
+.z-50    { z-index: 50; }  /* পপআপ বা ওভারলে ফ্রেমের জন্য */
+.z-100   { z-index: 100; } /* আপনার অ্যানিমেশন পেনের হাতের জন্য (হাত সবসময় ওপরে থাকবে) */
+.z-999   { z-index: 999; }
+
+
+/* ==========================================================================
+   📏 15. LINE HEIGHT UTILITIES (Leading Classes for Text Spacing)
+   ========================================================================== */
+
+/* ১. leading-none: একদম টাইট বা জিরো গ্যাপ (মূলত আল্ট্রা-বোল্ড মেগা হেডিংয়ের জন্য) */
+.leading-none     { line-height: 1; }
+
+/* ২. leading-tight: কম গ্যাপ (বড় সাইজের টাইটেল বা ২ লাইনের হেডিংয়ের জন্য বেস্ট) */
+.leading-tight    { line-height: 1.25; }
+
+/* ৩. leading-snug: হালকা চিপা গ্যাপ (সাব-হেডিং বা বড় প্যারাগ্রাফ কন্টেন্টের জন্য) */
+.leading-snug     { line-height: 1.375; }
+
+/* ৪. leading-normal: স্ট্যান্ডার্ড ডিফল্ট গ্যাপ (সাধারণ টেক্সটের জন্য) */
+.leading-normal   { line-height: 1.5; }
+
+/* ৫. leading-relaxed: চমৎকার ছড়ানো গ্যাপ (হ্যান্ডরাইটিং বা মার্কার পেন প্যারাগ্রাফের জন্য ১ নম্বর চয়েস) */
+.leading-relaxed  { line-height: 1.625; }
+
+/* ৬. leading-loose: মেগা গ্যাপ (যদি লাইনের মাঝে খাতার রুলিং লাইনের মতো বড় ফাঁকা জায়গা চান) */
+.leading-loose    { line-height: 2; }
+
+
+/* --- 🎯 হোয়াইটবোর্ড স্পেশাল কাস্টম পিক্সেল বেসড লাইন-হাইট (নিখুঁত গ্রিড ম্যাচিংয়ের জন্য) --- */
+.leading-40       { line-height: 40px; }
+.leading-50       { line-height: 50px; }
+.leading-60       { line-height: 60px; }
+.leading-70       { line-height: 70px; }
+.leading-80       { line-height: 80px; }
+.leading-90       { line-height: 90px; }
+.leading-100      { line-height: 100px; }
+########################################################
+
+  \package.json  
+########################################################
+        {
+  "name": "declarative-video-exporter",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "snapshot": "node utility/snapshot.js",
+    "generate-audio": "node server/generate-audio.js",
+    "generate-audio:force": "node server/generate-audio.js -- --force",
+    "list-voices": "node server/list-voices.js",
+    "list-voices:en": "node server/list-voices.js en-US"
+  },
+  "dependencies": {
+    "edge-tts-node": "^2.0.11",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.1.4"
+  }
+}
+
+########################################################
+
+  \server\audio-script.json  
+########################################################
+        {
+  "_comment": [
+    "This file defines every audio cue that must be generated.",
+    "Run:  npm run generate-audio",
+    "Output goes to: client/public/audio/",
+    "",
+    "Fields per entry:",
+    "  out   : output mp3 filename  (must match the src= in your scene config)",
+    "  text  : the spoken text",
+    "  voice : (optional) Edge TTS voice name — overrides default",
+    "  rate  : (optional) speed multiplier, default 1.0 (range 0.5 – 2.0)",
+    "  pitch : (optional) pitch string e.g. '+2Hz', '-5Hz', default '+0Hz'",
+    "",
+    "Browse voices with:  node server/list-voices.js",
+    "Recommended en-US voices:",
+    "  en-US-AriaNeural        — warm, friendly female (great for tutorials)",
+    "  en-US-GuyNeural         — clear, professional male",
+    "  en-US-JennyNeural       — bright, conversational female",
+    "  en-US-TonyNeural        — energetic male presenter",
+    "  en-GB-SoniaNeural       — British female, polished",
+    "  en-AU-NatashaNeural     — Australian female"
+  ],
+
+  "defaultVoice": "en-US-AriaNeural",
+  "defaultRate": 0.95,
+  "defaultPitch": "+0Hz",
+
+  "cues": [
+    {
+      "out": "scene_01_seq_01.mp3",
+      "text": "Welcome to the MCP Tutorial."
+    },
+    {
+      "out": "scene_01_seq_03.mp3",
+      "text": "Model Context Protocol, or MCP, is an open standard that allows AI models to securely connect to external tools, data sources, and services — making them far more capable and context-aware."
+    },
+    {
+      "out": "scene_01_seq_04.mp3",
+      "text": "Here you can see the overall architecture of the Model Context Protocol system."
+    },
+
+    {
+      "out": "scene_02_seq_01.mp3",
+      "text": "Let's explore how MCP actually works."
+    },
+    {
+      "out": "scene_02_seq_03.mp3",
+      "text": "The host application — for example, Claude Desktop — acts as an MCP client. It discovers MCP servers, which are lightweight processes that expose Tools, Resources, and Prompts over a local or remote transport layer."
+    },
+    {
+      "out": "scene_02_seq_04.mp3",
+      "text": "This diagram shows the client-server communication flow inside MCP."
+    },
+
+    {
+      "out": "scene_03_seq_01.mp3",
+      "text": "Now let's look at building your first MCP server."
+    },
+    {
+      "out": "scene_03_seq_03.mp3",
+      "text": "Use the SDK to register tools with registerTool(), expose file resources with registerResource(), and define reusable prompt templates with registerPrompt(). Deploy via stdio or HTTP over SSE transport."
+    },
+    {
+      "out": "scene_03_seq_04.mp3",
+      "text": "The code sample here shows a minimal MCP server implementation."
+    }
+  ]
+}
+
+########################################################
+
+  \server\generate-audio.js  
+########################################################
+        #!/usr/bin/env node
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * generate-audio.js  —  Edge TTS audio cue generator (FREE, no API key)
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Usage:
+ *   npm run generate-audio
+ *   npm run generate-audio -- --script server/audio-script.json
+ *   npm run generate-audio -- --only scene_01_seq_01.mp3
+ *   npm run generate-audio -- --voice en-GB-SoniaNeural
+ *   npm run generate-audio -- --list-voices
+ *
+ * Output:  client/public/audio/<filename>.mp3
+ *
+ * Powered by Microsoft Edge TTS via edge-tts-node (free, no auth required).
+ * Voices stream from the same speech service Edge browser uses internally.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+import { createRequire } from 'module';
+import fs   from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// edge-tts-node is CJS, require it via createRequire
+const require = createRequire(import.meta.url);
+const { MsEdgeTTS, OUTPUT_FORMAT } = require('edge-tts-node');
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT      = path.resolve(__dirname, '..');
+
+// ── CLI argument parsing ─────────────────────────────────────────────────────
+const args        = process.argv.slice(2);
+const flag        = (name) => args.includes(name);
+const opt         = (name) => {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : null;
+};
+
+const SCRIPT_PATH  = opt('--script')  || path.join(__dirname, 'audio-script.json');
+const ONLY_FILE    = opt('--only')    || null;
+const VOICE_OVERRIDE = opt('--voice') || null;
+const LIST_VOICES  = flag('--list-voices');
+
+// ── Output directory ─────────────────────────────────────────────────────────
+const OUT_DIR = path.join(ROOT, 'client', 'public', 'audio');
+fs.mkdirSync(OUT_DIR, { recursive: true });
+
+// ── List voices helper ────────────────────────────────────────────────────────
+async function listVoices() {
+  console.log('\n🔍 Fetching available Edge TTS voices...\n');
+  const tts    = new MsEdgeTTS({});
+  const voices = await tts.getVoices();
+  const en     = voices.filter((v) => v.Locale.startsWith('en'));
+  console.log(`Found ${voices.length} total voices, ${en.length} English:\n`);
+  en.forEach((v) => {
+    console.log(`  ${v.ShortName.padEnd(35)} ${v.Gender.padEnd(8)} ${v.Locale}`);
+  });
+  console.log('\nAll locale groups:');
+  const locales = [...new Set(voices.map((v) => v.Locale))].sort();
+  console.log(' ', locales.join('  '));
+  console.log();
+}
+
+// ── Generate a single MP3 file ────────────────────────────────────────────────
+async function generateOne(cue, defaults) {
+  const voice  = VOICE_OVERRIDE || cue.voice || defaults.voice || 'en-US-AriaNeural';
+  const rate   = cue.rate  ?? defaults.rate  ?? 0.95;
+  const pitch  = cue.pitch ?? defaults.pitch ?? '+0Hz';
+
+  const outPath = path.join(OUT_DIR, cue.out);
+
+  // Skip if already exists and --force is not set
+  if (fs.existsSync(outPath) && !flag('--force')) {
+    console.log(`  ⏭  Skipping (exists): ${cue.out}  — use --force to re-generate`);
+    return 'skipped';
+  }
+
+  process.stdout.write(`  ⏳  ${cue.out}  [${voice}]  rate=${rate} ...`);
+
+  // Create a fresh TTS instance per cue — each needs its own WS connection.
+  const tts = new MsEdgeTTS({});
+  try {
+    // setMetadata opens the WebSocket and configures the voice + format
+    await tts.setMetadata(
+      voice,
+      OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3
+    );
+
+    await tts.toFile(outPath, cue.text, {
+      rate,
+      pitch,
+      volume: 100,
+    });
+
+    const size = fs.statSync(outPath).size;
+    console.log(` ✅  ${(size / 1024).toFixed(1)} KB`);
+    return 'ok';
+  } catch (err) {
+    const msg = err && typeof err === 'object' ? (err.message || JSON.stringify(err)) : String(err);
+    console.log(` ❌  ${msg}`);
+    // Remove partial/zero-byte file if write failed
+    try {
+      if (fs.existsSync(outPath) && fs.statSync(outPath).size === 0) fs.unlinkSync(outPath);
+    } catch (_) {}
+    return 'error';
+  } finally {
+    try { tts.close(); } catch (_) {}
+  }
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+async function main() {
+  if (LIST_VOICES) {
+    await listVoices();
+    return;
+  }
+
+  // Load script definition
+  if (!fs.existsSync(SCRIPT_PATH)) {
+    console.error(`\n❌ Audio script not found: ${SCRIPT_PATH}`);
+    console.error('   Create one or pass --script <path>\n');
+    process.exit(1);
+  }
+
+  const script   = JSON.parse(fs.readFileSync(SCRIPT_PATH, 'utf-8'));
+  const defaults = {
+    voice: script.defaultVoice || 'en-US-AriaNeural',
+    rate:  script.defaultRate  ?? 0.95,
+    pitch: script.defaultPitch || '+0Hz',
+  };
+
+  let cues = script.cues || [];
+  if (!Array.isArray(cues) || cues.length === 0) {
+    console.error('\n❌ No cues found in script file.\n');
+    process.exit(1);
+  }
+
+  // Filter to single file if --only is specified
+  if (ONLY_FILE) {
+    cues = cues.filter((c) => c.out === ONLY_FILE);
+    if (cues.length === 0) {
+      console.error(`\n❌ --only "${ONLY_FILE}" not found in script.\n`);
+      process.exit(1);
+    }
+  }
+
+  console.log(`\n🎙  Edge TTS Audio Generator`);
+  console.log(`    Script : ${SCRIPT_PATH}`);
+  console.log(`    Voice  : ${VOICE_OVERRIDE || defaults.voice}`);
+  console.log(`    Rate   : ${defaults.rate}`);
+  console.log(`    Output : ${OUT_DIR}`);
+  console.log(`    Cues   : ${cues.length}`);
+  console.log(`    Force  : ${flag('--force') ? 'yes (re-generating all)' : 'no (skip existing)'}`);
+  console.log();
+
+  let ok = 0, skipped = 0, failed = 0;
+
+  for (const cue of cues) {
+    if (!cue.out || !cue.text) {
+      console.warn(`  ⚠  Skipping invalid cue: ${JSON.stringify(cue)}`);
+      skipped++;
+      continue;
+    }
+
+    const result = await generateOne(cue, defaults);
+    if (result === 'ok')           ok++;
+    else if (result === 'skipped') skipped++;
+    else                           failed++;
+  }
+
+  console.log();
+  console.log(`✅ Done — ${ok} generated, ${skipped} skipped, ${failed} failed`);
+  console.log(`   Files saved to: ${OUT_DIR}`);
+  console.log();
+}
+
+main().catch((err) => {
+  console.error('\n💥 Fatal error:', err);
+  process.exit(1);
+});
+
+########################################################
+
+  \server\list-voices.js  
+########################################################
+        #!/usr/bin/env node
+/**
+ * Quick helper: list all available Edge TTS voices.
+ * Usage: node server/list-voices.js [locale-prefix]
+ * Example: node server/list-voices.js en-US
+ */
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { MsEdgeTTS } = require('edge-tts-node');
+
+const filter = process.argv[2] || '';
+const tts    = new MsEdgeTTS({});
+const voices = await tts.getVoices();
+
+const list = filter
+  ? voices.filter((v) => v.Locale.toLowerCase().startsWith(filter.toLowerCase()))
+  : voices;
+
+console.log(`\n${'Voice Name'.padEnd(40)} ${'Gender'.padEnd(10)} Locale`);
+console.log('─'.repeat(70));
+list.forEach((v) => {
+  console.log(`${v.ShortName.padEnd(40)} ${v.Gender.padEnd(10)} ${v.Locale}`);
+});
+console.log(`\nTotal: ${list.length} voice(s)${filter ? ` matching "${filter}"` : ''}\n`);
+
+tts.close();
+
+########################################################
+
+  \utility\snapshot.js  
+########################################################
+        // snapshot.js
+import fs from "fs";
+import path from "path";
+
+const projectRoot = process.cwd();
+const outputFile = path.join(projectRoot, "project_snapshot.txt");
+
+const excluded = [
+  "node_modules",
+  "public",
+  ".git",
+  ".gitignore",
+  "package-lock.json",
+  "dist"
+];
+const excludedExtensions = [".md"];
+
+function isExcluded(filePath) {
+  const base = path.basename(filePath);
+  const ext = path.extname(filePath);
+  return excluded.includes(base) || excludedExtensions.includes(ext);
+}
+
+function getTree(dir, prefix = "") {
+  const entries = fs.readdirSync(dir, { withFileTypes: true })
+    .filter(e => !isExcluded(e.name));
+  let tree = "";
+  entries.forEach((entry, index) => {
+    const isLast = index === entries.length - 1;
+    const connector = isLast ? "└── " : "├── ";
+    const fullPath = path.join(dir, entry.name);
+    tree += `${prefix}${connector}${entry.name}\n`;
+    if (entry.isDirectory()) {
+      const newPrefix = prefix + (isLast ? "    " : "│   ");
+      tree += getTree(fullPath, newPrefix);
+    }
+  });
+  return tree;
+}
+
+
+
+function getCode(dir) {
+  let codeDump = "";
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (isExcluded(entry.name)) continue;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      codeDump += getCode(fullPath);
+    } else {
+      const ext = path.extname(entry.name);
+      if ([".js", ".jsx", ".ts", ".tsx", ".json", ".css", ".html"].includes(ext)) {
+        const content = fs.readFileSync(fullPath, "utf8");
+         codeDump += `########################################################`;
+        codeDump += `\n\n  ${fullPath.replace(projectRoot, "")}  \n`;
+        codeDump += `########################################################
+        ${content}\n`;
+      }
+    }
+  }
+  return codeDump;
+}
+
+function createSnapshot() {
+  console.log("📸 Generating project snapshot...");
+  let snapshot = "=== PROJECT TREE ===\n\n";
+  snapshot += getTree(projectRoot);
+  snapshot += "\n\n=== FILE CONTENTS ===\n";
+  snapshot += getCode(projectRoot);
+  fs.writeFileSync(outputFile, snapshot, "utf8");
+  console.log(`✅ Snapshot saved to ${outputFile}`);
+}
+
+createSnapshot();
+
+########################################################
+
+  \vite.config.js  
+########################################################
+        import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import path from 'path';
+
+export default defineConfig({
+  plugins: [react()],
+  root: 'client',
+  // client/public is served at / (audio, config, assets/images all live here)
+  publicDir: path.resolve(__dirname, 'client/public'),
+  server: {
+    port: 3000,
+    // Ensure assets are served with correct MIME types
+    headers: {
+      'Cache-Control': 'no-cache',
+    },
+  },
+  build: {
+    outDir: path.resolve(__dirname, 'client/dist'),
+    emptyOutDir: true,
+  },
+  optimizeDeps: {
+    // Pin the dep-scan entry to the source index.html, not the dist output.
+    // Without this, Vite scans client/dist/index.html which references
+    // already-bundled assets and triggers a spurious esbuild failure.
+    entries: ['index.html'],
+  },
+});
+
