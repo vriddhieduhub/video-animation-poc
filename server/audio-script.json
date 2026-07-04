@@ -1,0 +1,68 @@
+{
+  "_comment": [
+    "This file defines every audio cue that must be generated.",
+    "Run:  npm run generate-audio",
+    "Output goes to: client/public/audio/",
+    "",
+    "Fields per entry:",
+    "  out   : output mp3 filename  (must match the src= in your scene config)",
+    "  text  : the spoken text",
+    "  voice : (optional) Edge TTS voice name — overrides default",
+    "  rate  : (optional) speed multiplier, default 1.0 (range 0.5 – 2.0)",
+    "  pitch : (optional) pitch string e.g. '+2Hz', '-5Hz', default '+0Hz'",
+    "",
+    "Browse voices with:  node server/list-voices.js",
+    "Recommended en-US voices:",
+    "  en-US-AriaNeural        — warm, friendly female (great for tutorials)",
+    "  en-US-GuyNeural         — clear, professional male",
+    "  en-US-JennyNeural       — bright, conversational female",
+    "  en-US-TonyNeural        — energetic male presenter",
+    "  en-GB-SoniaNeural       — British female, polished",
+    "  en-AU-NatashaNeural     — Australian female"
+  ],
+
+  "defaultVoice": "en-US-AriaNeural",
+  "defaultRate": 0.95,
+  "defaultPitch": "+0Hz",
+
+  "cues": [
+    {
+      "out": "scene_01_seq_01.mp3",
+      "text": "Welcome to the MCP Tutorial."
+    },
+    {
+      "out": "scene_01_seq_03.mp3",
+      "text": "Model Context Protocol, or MCP, is an open standard that allows AI models to securely connect to external tools, data sources, and services — making them far more capable and context-aware."
+    },
+    {
+      "out": "scene_01_seq_04.mp3",
+      "text": "Here you can see the overall architecture of the Model Context Protocol system."
+    },
+
+    {
+      "out": "scene_02_seq_01.mp3",
+      "text": "Let's explore how MCP actually works."
+    },
+    {
+      "out": "scene_02_seq_03.mp3",
+      "text": "The host application — for example, Claude Desktop — acts as an MCP client. It discovers MCP servers, which are lightweight processes that expose Tools, Resources, and Prompts over a local or remote transport layer."
+    },
+    {
+      "out": "scene_02_seq_04.mp3",
+      "text": "This diagram shows the client-server communication flow inside MCP."
+    },
+
+    {
+      "out": "scene_03_seq_01.mp3",
+      "text": "Now let's look at building your first MCP server."
+    },
+    {
+      "out": "scene_03_seq_03.mp3",
+      "text": "Use the SDK to register tools with registerTool(), expose file resources with registerResource(), and define reusable prompt templates with registerPrompt(). Deploy via stdio or HTTP over SSE transport."
+    },
+    {
+      "out": "scene_03_seq_04.mp3",
+      "text": "The code sample here shows a minimal MCP server implementation."
+    }
+  ]
+}

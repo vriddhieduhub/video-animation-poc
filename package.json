@@ -1,0 +1,23 @@
+{
+  "name": "declarative-video-exporter",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "generate-audio": "node server/generate-audio.js",
+    "generate-audio:force": "node server/generate-audio.js -- --force",
+    "list-voices": "node server/list-voices.js",
+    "list-voices:en": "node server/list-voices.js en-US"
+  },
+  "dependencies": {
+    "edge-tts-node": "^2.0.11",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.1.4"
+  }
+}

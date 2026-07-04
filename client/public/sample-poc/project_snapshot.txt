@@ -1,0 +1,3303 @@
+===========================================
+PROJECT STRUCTURE
+===========================================
+
+src/
+├── components/
+│   ├── RevealElement.jsx
+│   └── types/
+│       ├── ArrowWithText.jsx
+│       ├── CodingBlock.jsx
+│       ├── DynamicArrow.jsx
+│       ├── H1.jsx
+│       ├── Hr.jsx
+│       ├── Image.jsx
+│       ├── ListBlock.jsx
+│       ├── P.jsx
+│       ├── ParagraphBlock.jsx
+│       ├── Table.jsx
+│       └── WhiteboardEraser.jsx
+├── Composition.jsx
+├── fonts.js
+├── index.css
+├── index.js
+├── MainVideoEngine.jsx
+├── master.css
+├── Root.jsx
+├── utils/
+│   └── styleResolver.js
+└── whiteboard.config.js
+
+
+===========================================
+FILE CONTENTS
+===========================================
+
+###########################################
+src\components\RevealElement.jsx
+###########################################
+import React from 'react';
+import {interpolate, useCurrentFrame, useVideoConfig} from 'remotion';
+import {getAnimationFrames} from '../whiteboard.config';
+
+export const RevealSequence = ({children}) => {
+  const {fps} = useVideoConfig();
+  const elements = React.Children.toArray(children).filter(React.isValidElement);
+  const sequenceIds = [...new Set(elements.map((element) => element.props.sequenceId))].sort(
+    (a, b) => a - b,
+  );
+
+  const timeline = new Map();
+  let nextStartFrame = 0;
+
+  for (const sequenceId of sequenceIds) {
+    const group = elements.filter((element) => element.props.sequenceId === sequenceId);
+    
+    // 🎯 মেইন ফিক্স ১: গ্রুপ ফ্রেম ক্যালকুলেট করার সময় আসল ভেতরের চাইল্ড নোডটি পাঠানো হচ্ছে
+    const groupFrames = Math.max(
+      ...group.map((element) => {
+        const coreChild = element.props.children;
+        return React.isValidElement(coreChild)
+          ? getAnimationFrames(coreChild, fps).animationFrames
+          : getAnimationFrames(element, fps).animationFrames;
+      }),
+    );
+
+    timeline.set(sequenceId, {startFrame: nextStartFrame});
+    nextStartFrame += groupFrames;
+  }
+
+  return elements.map((element) => {
+    const sequenceTiming = timeline.get(element.props.sequenceId);
+    
+    // 🎯 মেইন ফিক্স ২: ক্লোনিং এবং ওন টাইমিংয়ের সময়ও আসল ভেতরের চাইল্ডের ফ্রেম পাস করা হচ্ছে
+    const coreChild = element.props.children;
+    const ownTiming = React.isValidElement(coreChild)
+      ? getAnimationFrames(coreChild, fps)
+      : getAnimationFrames(element, fps);
+
+    // RevealElement তার নিজের progress ক্যালকুলেশনের জন্য animationFrames এবং progressEnd পাবে
+    return React.cloneElement(element, {...sequenceTiming, ...ownTiming});
+  });
+};
+
+export const RevealElement = ({
+  startFrame = 0,
+  animationFrames = 1,
+  progressEnd = 100,
+  x,
+  y,
+  children,
+}) => {
+  const frame = useCurrentFrame();
+
+  // প্রগ্রেস ক্যালকুলেশন - নিজস্ব স্টার্ট ফ্রেমের সাপেক্ষে (এখন animationFrames একদম নিখুঁত ভ্যালু পাবে)
+  const progress = interpolate(
+    frame,
+    [startFrame, startFrame + animationFrames],
+    [0, progressEnd],
+    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
+  );
+
+  // এলিমেন্টটি মাউন্ট থাকা দরকার যাতে রিফ কাজ করে, কিন্তু স্টার্ট ফ্রেমের আগে হাইড থাকবে
+  const isStarted = frame >= startFrame;
+
+  return (
+    <div style={{position: 'absolute', top: y, left: x, visibility: isStarted ? 'visible' : 'hidden'}}>
+      {/* 🎯 মেইন ফিক্স ৩: চাইল্ড কম্পোনেন্টের কাছে প্রগ্রেসের সাথে সাথে তার বরাদ্দকৃত আসল ফ্রেমও পাস করে দেওয়া হলো */}
+      {React.cloneElement(children, { progress, animationFrames })}
+    </div>
+  );
+};
+
+###########################################
+src\components\types\ArrowWithText.jsx
+###########################################
+import React, { useRef, useState, useLayoutEffect } from 'react';
+import { useCurrentFrame, Img, staticFile, interpolate } from 'remotion';
+import { parseClassNameToStyle } from '../../utils/styleResolver';
+
+export const ArrowWithText = ({ 
+  startX, 
+  startY, 
+  endX, 
+  endY, 
+  text, 
+  textPosition = 'top', // 'top' অথবা 'bottom'
+  progress, 
+  className = '', 
+  color = '#000000', 
+  thickness = 4,
+  style: inlineStyle
+}) => {
+  const frame = useCurrentFrame();
+  const pathRef = useRef(null);
+  const [totalLength, setTotalLength] = useState(0);
+
+  const parsedStyle = parseClassNameToStyle(className);
+
+  useLayoutEffect(() => {
+    if (pathRef.current) {
+      setTotalLength(pathRef.current.getTotalLength());
+    }
+  }, []);
+
+  const pathData = `M ${startX} ${startY} L ${endX} ${endY}`;
+
+  // ⏱️ প্রগ্রেস বন্টন: প্রথম ৫০% সময়ে তীর আঁকা হবে, পরের ৫০% সময়ে টেক্সট লেখা হবে
+  const arrowProgress = interpolate(progress, [0, 50], [0, 100], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+
+  const textProgress = interpolate(progress, [50, 100], [0, 100], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+
+  // তীরের কালি রিভিল লজিক
+  const strokeDashoffset = totalLength - (arrowProgress / 100) * totalLength;
+
+  // তীরের এঙ্গেল ক্যালকুলেশন (Arrow Head এর জন্য)
+  const angle = Math.atan2(endY - startY, endX - startX) * (180 / Math.PI);
+
+  // টেক্সট ক্যারেক্টার হ্যান্ডলিং
+  const chars = text.split("");
+  const charsToShow = Math.floor((textProgress / 100) * chars.length);
+
+  // ✒️ পেনের নিব ট্র্যাকিং (হাত কোথায় থাকবে)
+  let handX = startX;
+  let handY = startY;
+  const isWritingActive = progress > 0 && progress < 100;
+
+  if (progress <= 50) {
+    // তীর আঁকার সময় পেনের পজিশন
+    if (pathRef.current && totalLength > 0) {
+      const currentPoint = (arrowProgress / 100) * totalLength;
+      const point = pathRef.current.getPointAtLength(currentPoint);
+      handX = point.x;
+      handY = point.y;
+    }
+  } else {
+    // টেক্সট লেখার সময় পেনের পজিশন (লিনিয়ার ব্যাকআপ মুভমেন্ট)
+    const textWidthEstimate = chars.length * 16; 
+    const textStartX = startX + (endX - startX) / 2 - textWidthEstimate / 2;
+    handX = textStartX + (textProgress / 100) * textWidthEstimate;
+    handY = textPosition === 'top' ? startY - 40 : startY + 40;
+  }
+
+  // টেক্সটের পজিশন ঠিক করা (তীরের ওপরে না নিচে)
+  const textTopPos = textPosition === 'top' ? startY - 70 : startY + 20;
+  const textLeftPos = startX + (endX - startX) / 2;
+
+  return (
+    <>
+      {/* 🏹 SVG Arrow Part */}
+      <svg style={{ position: 'absolute', top: 0, left: 0, width: '1920px', height: '1080px', pointerEvents: 'none', zIndex: 8 }}>
+        <path
+          ref={pathRef}
+          d={pathData}
+          fill="none"
+          stroke={color}
+          strokeWidth={thickness}
+          strokeDasharray={totalLength}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+        />
+        {arrowProgress === 100 && (
+          <polygon
+            points={`${endX},${endY} ${endX - 15},${endY - 7} ${endX - 15},${endY + 7}`}
+            fill={color}
+            transform={`rotate(${angle}, ${endX}, ${endY})`}
+          />
+        )}
+      </svg>
+
+      {/* 📝 Text Part (Kalam হরফে রিয়েল হ্যান্ডরাইটিং লুক) */}
+      {progress > 50 && (
+        <div
+            className={className} // 👈 যাতে বাইরে থেকে পাঠানো text-3xl বা text-2xl ক্লাস কাজ করে
+            style={{
+                ...parsedStyle, // 👈 master.css এর ফন্ট সাইজ স্টাইল ইমপোর্ট করার জন্য
+                ...inlineStyle,
+                position: 'absolute',
+                top: `${textTopPos}px`,
+                left: `${textLeftPos}px`,
+                transform: 'translateX(-50%)',
+                color: color || parsedStyle?.color || '#000000',
+                whiteSpace: 'nowrap',
+                zIndex: 9,
+                textAlign: 'center'
+            }}
+            >
+          {chars.map((char, idx) => (
+            <span key={idx} style={{ opacity: idx < charsToShow ? 1 : 0 }}>
+              {char}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* ✒️ অ্যানিমেশন রাইটিং হ্যান্ড */}
+      {isWritingActive && (
+        <Img
+          src={staticFile("/images/hand/finaHandImg.png")}
+          alt="Hand drawing arrow with text"
+          style={{
+            position: 'absolute',
+            left: `${handX - 25}px`,
+            top: `${handY - 15}px`,
+            width: '180px',
+            zIndex: 100,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </>
+  );
+};
+
+ArrowWithText.animationType = 'paragraph'; // existing duration architecture এ খাপ খাওয়ানোর জন্য
+
+###########################################
+src\components\types\CodingBlock.jsx
+###########################################
+import React from 'react';
+
+export const CodingBlock = ({ code, progress }) => {
+  const charsToShow = Math.floor((progress / 100) * code.length);
+
+  return (
+    <div style={{ backgroundColor: '#1e1e1e', padding: '25px', borderRadius: '12px', width: '700px', boxShadow: '0 10px 20px rgba(0,0,0,0.15)' }}>
+      <pre style={{ margin: 0, fontFamily: "'Courier New', Courier, monospace", fontSize: '24px', color: '#4ade80', whiteSpace: 'pre-wrap' }}>
+        <code>{code.substring(0, charsToShow)}</code>
+      </pre>
+    </div>
+  );
+};
+
+###########################################
+src\components\types\DynamicArrow.jsx
+###########################################
+// src/components/types/DynamicArrow.jsx
+import React, { useRef, useState, useLayoutEffect } from 'react';
+import { useCurrentFrame, Img, staticFile, interpolate } from 'remotion';
+
+export const DynamicArrow = ({ 
+  startX, 
+  startY, 
+  endX, 
+  endY, 
+  controlX, // যদি বাঁকা (Curved) তীর বানাতে চাও, তবে এটি লাগবে (ঐচ্ছিক)
+  controlY, 
+  progress, 
+  color = '#1d4ed8', 
+  thickness = 4 
+}) => {
+  const frame = useCurrentFrame();
+  const pathRef = useRef(null);
+  const [totalLength, setTotalLength] = useState(0);
+
+  // SVG Path এর টোটাল পিক্সেল লেন্থ বের করার জন্য
+  useLayoutEffect(() => {
+    if (pathRef.current) {
+      setTotalLength(pathRef.current.getTotalLength());
+    }
+  }, []);
+
+  // যদি control point থাকে তবে কার্ভ (Bezier) লাইন হবে, নাহলে সোজা কোণাকুণি লাইন
+  const pathData = controlX && controlY 
+    ? `M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}`
+    : `M ${startX} ${startY} L ${endX} ${endY}`;
+
+  // প্রগ্রেস অনুযায়ী লাইনের কালি কতটা রিভিল হবে
+  const strokeDashoffset = totalLength - (progress / 100) * totalLength;
+
+  // রিয়েল-টাইম পেনের নিবের পজিশন ক্যালকুলেট করা (হাতের জন্য)
+  let handX = startX;
+  let handY = startY;
+
+  if (pathRef.current && totalLength > 0) {
+    const currentPointIndex = (progress / 100) * totalLength;
+    const point = pathRef.current.getPointAtLength(currentPointIndex);
+    handX = point.x;
+    handY = point.y;
+  }
+
+  // পেনের নিবের ইউনিভার্সাল অফসেট
+  const writeOffsetX = -25;
+  const writeOffsetY = -10;
+
+  const isWritingActive = progress > 0 && progress < 100;
+
+  // তীরের মাথার (Arrow Head) কোণ বা অ্যাঙ্গেল ক্যালকুলেট করা (যাতে তীরটি যেদিকে যাচ্ছে সেদিকেই ঘুরে থাকে)
+  const angle = Math.atan2(endY - startY, endX - startX) * (180 / Math.PI);
+
+  return (
+    <>
+      <svg style={{ position: 'absolute', top: 0, left: 0, width: '1920px', height: '1080px', pointerEvents: 'none', zIndex: 8 }}>
+        {/* মূল অ্যানিমেটেড রেখা */}
+        <path
+          ref={pathRef}
+          d={pathData}
+          fill="none"
+          stroke={color}
+          strokeWidth={thickness}
+          strokeDasharray={totalLength}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+        />
+
+        {/* তীরের মাথা (অ্যানিমেশন ১০০% শেষ হলে নিখুঁত অ্যাঙ্গেলে ভেসে উঠবে) */}
+        {progress === 100 && (
+          <polygon
+            points={`${endX},${endY} ${endX - 15},${endY - 8} ${endX - 15},${endY + 8}`}
+            fill={color}
+            transform={`rotate(${angle}, ${endX}, ${endY})`}
+          />
+        )}
+      </svg>
+
+      {/* হাত দিয়ে ড্র করার অ্যানিমেশন */}
+      {isWritingActive && (
+        <Img
+          src={staticFile("/images/hand/finaHandImg.png")}
+          alt="Hand drawing dynamic arrow"
+          style={{
+            position: 'absolute',
+            left: `${handX + writeOffsetX}px`,
+            top: `${handY + writeOffsetY}px`,
+            width: '180px',
+            zIndex: 100,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </>
+  );
+};
+
+DynamicArrow.animationType = 'underline'; // তোমার ইঞ্জিনের কনফিগ চাবি
+
+###########################################
+src\components\types\H1.jsx
+###########################################
+import React, { useMemo, useRef, useState, useEffect, useLayoutEffect } from 'react';
+import { useCurrentFrame, Img, staticFile, interpolate } from 'remotion';
+import { headingAnimationConfig } from '../../whiteboard.config'; 
+import { parseClassNameToStyle } from '../../utils/styleResolver';
+import { resolveFontStyles } from '../../fonts';
+
+// ক্যারেক্টার ম্যাপ তৈরি করার পার্সার
+const flattenNodes = (children) => {
+  const result = [];
+  const traverse = (node, inheritedProps = { style: {}, className: '' }) => {
+    if (typeof node === 'string' || typeof node === 'number') {
+      const str = String(node);
+      for (let char of str) {
+        result.push({ 
+          char, 
+          style: inheritedProps.style, 
+          className: inheritedProps.className,
+          type: inheritedProps.type 
+        });
+      }
+    } else if (React.isValidElement(node)) {
+      const nodeProps = node.props || {};
+      let combinedStyle = { ...inheritedProps.style, ...nodeProps.style };
+      let combinedClassName = [inheritedProps.className, nodeProps.className].filter(Boolean).join(' ');
+      React.Children.forEach(nodeProps.children, (child) => 
+        traverse(child, { style: combinedStyle, className: combinedClassName, type: node.type })
+      );
+    }
+  };
+  React.Children.forEach(children, (child) => traverse(child));
+  return result;
+};
+
+export const H1 = ({ children, className = '', color, progress, style: inlineStyle }) => {
+  const frame = useCurrentFrame();
+  const containerRef = useRef(null);
+  const [charPositions, setCharPositions] = useState([]);
+
+  const parsedStyle = useMemo(() => parseClassNameToStyle(className), [className]);
+  const style = useMemo(() => ({ ...parsedStyle, ...inlineStyle }), [parsedStyle, inlineStyle]);
+  const animationConfig = headingAnimationConfig;
+
+  const fontSize = style?.fontSize ? parseFloat(style.fontSize) : 95;
+  const {fontFamily, fontStyle, fontWeight} = resolveFontStyles({style, className});
+
+  const flatChars = useMemo(() => flattenNodes(children), [children]);
+  const totalChars = flatChars.length;
+
+  // DOM পজিশন ট্র্যাকিং - useLayoutEffect ব্যবহার করা হলো যাতে রেন্ডারিং এর আগেই ক্যালকুলেশন হয়
+  useLayoutEffect(() => {
+    if (!containerRef.current) return;
+    const spans = containerRef.current.querySelectorAll('.live-char');
+    const positions = [];
+    
+    spans.forEach((span) => {
+      positions.push({
+        x: span.offsetLeft + span.offsetWidth, 
+        y: span.offsetTop, 
+        width: span.offsetWidth,
+        height: span.offsetHeight
+      });
+    });
+    
+    if (positions.length > 0) {
+      setCharPositions(positions);
+    }
+  }, [flatChars, totalChars, frame]); // frame dependency ensures it updates during animation
+
+  // প্রগ্রেস হ্যান্ডলিং
+  const adjustedProgress = interpolate(
+    progress,
+    [0, 100],
+    [0, 100],
+    { extrapolateRight: 'clamp' }
+  );
+
+  const globalCharProgress = (adjustedProgress / 100) * totalChars;
+  const currentCharIndex = Math.min(Math.floor(globalCharProgress), totalChars - 1);
+  const charRemainder = globalCharProgress - currentCharIndex;
+  const charsToShow = Math.floor(globalCharProgress);
+
+  let handBaseX = 0;
+  let handBaseY = 0;
+
+  if (charPositions.length === totalChars && totalChars > 0) {
+    const c1 = charPositions[currentCharIndex];
+    const c2 = charPositions[Math.min(currentCharIndex + 1, totalChars - 1)];
+
+    if (c2 && c1 && c2.y > c1.y) {
+      handBaseX = charRemainder < 0.1 ? c1.x : c2.x - c2.width;
+      handBaseY = charRemainder < 0.1 ? c1.y : c2.y;
+    } else if (c1) {
+      handBaseX = c1.x + ((c2 ? c2.x : c1.x) - c1.x) * charRemainder;
+      handBaseY = c1.y;
+    }
+  }
+
+  const writeOffsetX = -55;
+  const writeOffsetY = fontSize * 0.5; 
+
+  const externalLeft = style?.left ? parseFloat(style.left) : 0;
+  const externalTop = style?.top ? parseFloat(style.top) : 0;
+
+  const handX = handBaseX + writeOffsetX + externalLeft;
+  const isWritingActive = adjustedProgress > 0 && adjustedProgress < 100;
+
+  const wave1 = Math.sin(frame * animationConfig.waveFrequency);
+  const wave2 = Math.cos(frame * (animationConfig.waveFrequency * 0.55));
+  const compoundWaveY = isWritingActive 
+    ? (wave1 * 0.6 + wave2 * 0.4) * animationConfig.waveAmplitude 
+    : 0;
+
+  const humanNoiseX = isWritingActive ? ((Math.random() - 0.5) * animationConfig.microNoise) : 0;
+  const humanNoiseY = isWritingActive ? ((Math.random() - 0.5) * animationConfig.microNoise) : 0;
+
+  const handY = handBaseY + writeOffsetY + compoundWaveY + humanNoiseY + externalTop;
+
+  if (adjustedProgress <= 0) return null;
+
+  return (
+    <>
+      <h1 
+        ref={containerRef}
+        className={className}
+        style={{ 
+          ...style,
+          position: 'absolute',
+          top: style?.top || '0px',
+          left: style?.left || '0px',
+          fontSize: `${fontSize}px`, 
+          color: color || style?.color || '#ce1414', 
+          margin: style?.margin || 0, 
+          fontFamily: fontFamily, 
+          fontStyle,
+          fontWeight,
+          whiteSpace: 'pre',
+          lineHeight: style?.lineHeight || 1.2,
+          zIndex: style?.zIndex || 10,
+          width: style?.width === '100%' ? 'auto' : style?.width,
+        }}
+      >
+        {flatChars.map((item, idx) => {
+          const isVisible = idx < charsToShow;
+          return (
+            <span
+              key={idx}
+              className="live-char"
+              style={{
+                ...item.style,
+                display: 'inline',
+                opacity: isVisible ? 1 : 0, 
+              }}
+            >
+              {item.char}
+            </span>
+          );
+        })}
+      </h1>
+
+      {isWritingActive && charPositions.length === totalChars && (
+        <Img
+          src={staticFile("/images/hand/finaHandImg.png")}
+          alt="Hand with pen"
+          style={{
+            position: 'absolute',
+            left: `${handX + humanNoiseX}px`,
+            top: `${handY}px`,
+            width: '180px',
+            zIndex: 100,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </>
+  );
+};
+
+H1.animationType = 'heading';
+
+
+###########################################
+src\components\types\Hr.jsx
+###########################################
+import React from 'react';
+import { useCurrentFrame, Img, staticFile, interpolate } from 'remotion';
+import { underlineAnimationConfig } from '../../whiteboard.config';
+import { parseClassNameToStyle } from '../../utils/styleResolver';
+
+export const Hr = ({ color, progress, style: inlineStyle, className = '' }) => {
+  const frame = useCurrentFrame();
+  const animationConfig = underlineAnimationConfig;
+
+  const parsedStyle = parseClassNameToStyle(className);
+  const style = { ...parsedStyle, ...inlineStyle };
+
+  // বাইরে থেকে সিএসএস-এ পাঠানো লেআউট প্রপ্স রিড করা হচ্ছে (ডিফল্ট ফুল উইডথ ৩০০ পিক্সেল)
+  const externalWidth = style?.width === '100%' ? '100%' : (style?.width ? parseFloat(style.width) : 300);
+  const externalLeft = style?.left ? parseFloat(style.left) : 0;
+  const externalTop = style?.top ? parseFloat(style.top) : 0;
+  const lineHeight = style?.height ? parseFloat(style.height) : 6;
+
+  // ১. স্পিড মাল্টিপ্লায়ার অনুযায়ী আন্ডারলাইনের প্রগ্রেস রিম্যাপ করা
+  const adjustedProgress = interpolate(
+    progress * animationConfig.speedMultiplier,
+    [0, 100],
+    [0, 100],
+    { extrapolateRight: 'clamp' }
+  );
+
+  // টাইমলাইনের শুরুতে সেফটি লক (কিচ্ছু রেন্ডার হবে না)
+  if (adjustedProgress === 0) {
+    return null;
+  }
+
+  // ২. পিক্সেল পজিশন ও হাত ট্র্যাকিং ক্যালকুলেশন
+  // লাইনটি বাইরে থেকে আসা টোটাল উইডথ অনুযায়ী সাব-ফ্রেমে মসৃণভাবে বাড়বে
+  const currentLineWidth = interpolate(adjustedProgress, [0, 100], [0, externalWidth]);
+  const handBaseX = Math.round(currentLineWidth);
+
+  // পেনের নিব একদম লাইনের কালির ডগায় লক করার নিখুঁত অফসেট
+  const writeOffsetX = -25;
+  const writeOffsetY = -10; // লাইনের থিকনেস কম হওয়ায় পজিশন একটু ওপরে সেট করা হলো
+  
+  const handX = handBaseX + writeOffsetX + externalLeft;
+
+  // ==========================================================
+  // 🌊 আন্ডারলাইনের জন্য ডেডিকেটেড সাইন-ওয়েভ ও রিয়েল র‍্যান্ডমনেস
+  // ==========================================================
+  const isWritingActive = adjustedProgress > 0 && adjustedProgress < 100;
+
+  const wave1 = Math.sin(frame * animationConfig.waveFrequency);
+  const wave2 = Math.cos(frame * (animationConfig.waveFrequency * 0.53));
+  
+  // আন্ডারলাইনের ক্ষেত্রে হাত সোজা যাবে তবে হালকা রিয়েলিস্টিক হিউম্যান ভাইব্রেশন থাকবে
+  const compoundWaveY = isWritingActive 
+    ? (wave1 * 0.7 + wave2 * 0.3) * animationConfig.waveAmplitude 
+    : 0;
+
+  const humanNoiseX = isWritingActive 
+    ? (Math.sin(frame * 1.5) * 1.5) + ((Math.random() - 0.5) * animationConfig.microNoise)
+    : 0;
+
+  const humanNoiseY = isWritingActive ? ((Math.random() - 0.5) * animationConfig.microNoise) : 0;
+
+  const handY = writeOffsetY + compoundWaveY + humanNoiseY + externalTop;
+
+  return (
+    <>
+      {/* 🟢 ১. পিউর আলাদা গ্রিন আন্ডারলাইন এলিমেন্ট (কোনো টেক্সটের সাথে যুক্ত নয়) */}
+      <div
+        className = {className}
+        style={{
+          ...style,
+          position: 'absolute',
+          top: `${externalTop}px`,
+          left: `${externalLeft}px`,
+          width: `${currentLineWidth}px`, // প্রগ্রেস অনুযায়ী বাম থেকে ডানে বাড়বে
+          height: `${lineHeight}px`,
+          backgroundColor: color || style?.backgroundColor || style?.color || '#10b981', // ডিফল্ট আপনার সেই গ্রিন কালার
+          borderRadius: style?.borderRadius || '4px',
+          zIndex: style?.zIndex || 9,
+          willChange: 'width',
+        }}
+      />
+
+      {/* ২. ডেডিকেটেড হাত এলিমেন্ট: লাইন শেষ হওয়া মাত্রই ক্লিয়ার উধাও হয়ে যাবে */}
+      {isWritingActive && (
+        <Img
+          src={staticFile("/images/hand/finaHandImg.png")}
+          alt="Hand with pen"
+          style={{
+            position: 'absolute',
+            left: `${handX + humanNoiseX}px`,
+            top: `${handY}px`,
+            width: '180px',
+            zIndex: 100,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </>
+  );
+};
+
+Hr.animationType = 'underline';
+
+
+###########################################
+src\components\types\Image.jsx
+###########################################
+import React from 'react';
+import { useCurrentFrame, Img, staticFile, interpolate } from 'remotion';
+import { parseClassNameToStyle } from '../../utils/styleResolver';
+
+export const Image = ({ src, alt = "Whiteboard Image", progress, className = '', style: inlineStyle }) => {
+  const frame = useCurrentFrame();
+
+  const parsedStyle = parseClassNameToStyle(className);
+  const style = { ...parsedStyle, ...inlineStyle };
+
+  const width = style?.width ? parseFloat(style.width) : 380;
+  const height = style?.height ? parseFloat(style.height) : 380;
+  const externalLeft = style?.left ? parseFloat(style.left) : 0;
+  const externalTop = style?.top ? parseFloat(style.top) : 0;
+
+  if (progress === 0) return null;
+
+  // কোণাকুণি বেস পাথ ক্যালকুলেশন
+  const basePathX = (progress / 100) * width;
+  const basePathY = (progress / 100) * height;
+
+  const swingAngle = frame * 0.45;
+  const swing = Math.sin(swingAngle) * 45; 
+
+  const writeOffsetX = -25; 
+  const writeOffsetY = 15;
+
+  const handX = basePathX + swing + writeOffsetX + externalLeft;
+  const handY = basePathY - swing + writeOffsetY + externalTop;
+
+  // clip-path logic
+  let clipPathString = `polygon(0% 0%, 0% 0%, 0% 0%)`;
+  if (progress > 0) {
+    if (progress <= 50) {
+      const p = progress * 2;
+      clipPathString = `polygon(0% 0%, ${p}% 0%, 0% ${p}%)`;
+    } else {
+      const p = (progress - 50) * 2;
+      clipPathString = `polygon(0% 0%, 100% 0%, 100% ${p}%, ${p}% 100%, 0% 100%)`;
+    }
+  }
+
+  const isWritingActive = progress > 0 && progress < 100;
+  const microNoiseX = isWritingActive ? (Math.random() - 0.5) * 1.5 : 0;
+  const microNoiseY = isWritingActive ? (Math.random() - 0.5) * 1.5 : 0;
+
+  // 🎯 সেফটি ফিক্স: যদি src-এর শুরুতে '/' না থাকে, তবে সেটা অটোমেটিক যোগ করে নেওয়া হচ্ছে
+  const imagePath = src.startsWith('/') ? src : `/${src}`;
+
+  return (
+    <>
+      <div
+        className={className}
+        style={{
+          ...style,
+          position: 'absolute',
+          top: `${externalTop}px`,
+          left: `${externalLeft}px`,
+          width: `${width}px`,
+          height: `${height}px`,
+          overflow: 'hidden',
+          clipPath: clipPathString,
+          willChange: 'clip-path',
+        }}
+      >
+        {/* 🚀 এখানে staticFile() ব্যবহার করা হলো যাতে রেমোশন পাথ মিস না করে */}
+        <Img 
+          src={staticFile(imagePath)} 
+          alt={alt} 
+          style={{ width: '100%', height: '100%', objectFit: style?.objectFit || 'contain' }} 
+        />
+      </div>
+
+      {isWritingActive && (
+        <Img
+          src={staticFile("/images/hand/finalHandImgArt.png")}
+          alt="Hand drawing image"
+          style={{
+            position: 'absolute',
+            left: `${handX + microNoiseX}px`,
+            top: `${handY + microNoiseY}px`,
+            width: '180px',
+            zIndex: 100,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </>
+  );
+};
+
+Image.animationType = 'image';
+
+###########################################
+src\components\types\ListBlock.jsx
+###########################################
+import React from 'react';
+
+export const ListBlock = ({ items, progress }) => {
+  // প্রগ্রেস অনুযায়ী একটার পর একটা আইটেম রিভিল হবে
+  const itemsToShow = Math.floor((progress / 100) * (items.length + 1));
+
+  return (
+    <ul style={{ listStyleType: 'disc', paddingLeft: '30px', margin: 0, fontSize: '35px', fontFamily: "'Kalam', cursive", color: '#1e3a8a' }}>
+      {items.map((item, index) => {
+        if (index >= itemsToShow) return null;
+        return (
+          <li key={index} style={{ marginBottom: '20px', animation: 'pop 0.3s ease-out' }}>
+            {item}
+          </li>
+        );
+      })}
+    </ul>
+  );
+};
+
+###########################################
+src\components\types\P.jsx
+###########################################
+import React, { useMemo, useRef, useState, useEffect } from 'react';
+import { useCurrentFrame, Img, staticFile, interpolate } from 'remotion';
+import { paragraphAnimationConfig } from '../../whiteboard.config';
+import { parseClassNameToStyle } from '../../utils/styleResolver';
+
+// চাইল্ড নোড বা নেস্টেড স্প্যানগুলোকে ভেঙে ফ্ল্যাট ক্যারেক্টার ম্যাপ তৈরি করার পিউর পার্সার
+const flattenNodes = (children) => {
+  const result = [];
+  const traverse = (node, inheritedProps = { style: {}, className: '' }) => {
+    if (typeof node === 'string' || typeof node === 'number') {
+      const str = String(node);
+      for (let char of str) {
+        result.push({ 
+          char, 
+          style: inheritedProps.style, 
+          className: inheritedProps.className,
+          type: inheritedProps.type 
+        });
+      }
+    } else if (React.isValidElement(node)) {
+      const nodeProps = node.props || {};
+      let combinedStyle = { ...inheritedProps.style, ...nodeProps.style };
+      let combinedClassName = [inheritedProps.className, nodeProps.className].filter(Boolean).join(' ');
+      React.Children.forEach(nodeProps.children, (child) => 
+        traverse(child, { style: combinedStyle, className: combinedClassName, type: node.type })
+      );
+    }
+  };
+  React.Children.forEach(children, (child) => traverse(child));
+  return result;
+};
+
+export const P = ({ children, progress, style: inlineStyle, className = '', color }) => {
+  const frame = useCurrentFrame();
+  const containerRef = useRef(null);
+  const [charPositions, setCharPositions] = useState([]);
+
+  // ক্লাসনেম ও ইনলাইন স্টাইল মার্জ
+  const parsedStyle = parseClassNameToStyle(className);
+  const style = { ...parsedStyle, ...inlineStyle };
+
+  const animationConfig = paragraphAnimationConfig;
+  const fontSize = style?.fontSize ? parseFloat(style.fontSize) : 48;
+  const fontFamily = style?.fontFamily || "'Kalam', cursive, sans-serif";
+
+  // চাইল্ড স্ট্রাকচার ভেঙে ক্যারেক্টার অ্যারে তৈরি
+  const flatChars = useMemo(() => flattenNodes(children), [children]);
+  const totalChars = flatChars.length;
+
+  // DOM থেকে নিখুঁত পজিশন ট্র্যাকিং
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const spans = containerRef.current.querySelectorAll('.live-char');
+    const positions = [];
+    
+    spans.forEach((span) => {
+      positions.push({
+        x: span.offsetLeft + span.offsetWidth, 
+        y: span.offsetTop, 
+        width: span.offsetWidth,
+        height: span.offsetHeight
+      });
+    });
+    setCharPositions(positions);
+  }, [flatChars, totalChars, frame]);
+
+  // স্পিড মাল্টিপ্লায়ার প্রগ্রেস রিম্যাপ
+  const adjustedProgress = interpolate(
+    progress * animationConfig.speedMultiplier,
+    [0, 100],
+    [0, 100],
+    { extrapolateRight: 'clamp' }
+  );
+
+  if (adjustedProgress === 0) return null;
+
+  // রিয়েল-টাইম ক্যারেক্টার পজিশন ট্র্যাকিং
+  const globalCharProgress = (adjustedProgress / 100) * totalChars;
+  const currentCharIndex = Math.min(Math.floor(globalCharProgress), totalChars - 1);
+  const charRemainder = globalCharProgress - currentCharIndex;
+  const charsToShow = Math.floor(globalCharProgress);
+  let handBaseX = 0;
+  let handBaseY = 0;
+
+  if (charPositions.length === totalChars && totalChars > 0) {
+    const c1 = charPositions[currentCharIndex];
+    const c2 = charPositions[Math.min(currentCharIndex + 1, totalChars - 1)];
+
+    if (c2 && c1 && c2.y > c1.y) {
+      handBaseX = charRemainder < 0.1 ? c1.x : c2.x - c2.width;
+      handBaseY = charRemainder < 0.1 ? c1.y : c2.y;
+    } else if (c1) {
+      handBaseX = c1.x + ((c2 ? c2.x : c1.x) - c1.x) * charRemainder;
+      handBaseY = c1.y;
+    }
+  }
+
+  // পেনের নিবের পারফেক্ট রাইটিং অফসেট
+  const writeOffsetX = -18;
+  const writeOffsetY = fontSize * 0.75; 
+
+  // বাইরে থেকে সিএসএস-এ আসা পজিশন প্লাগ-ইন
+  const externalLeft = style?.left ? parseFloat(style.left) : 0;
+  const externalTop = style?.top ? parseFloat(style.top) : 0;
+
+  const handX = handBaseX + writeOffsetX + externalLeft;
+  const isWritingActive = adjustedProgress > 0 && adjustedProgress < 100;
+  const wave1 = Math.sin(frame * animationConfig.waveFrequency);
+  const wave2 = Math.cos(frame * (animationConfig.waveFrequency * 0.55));
+  const compoundWaveY = isWritingActive 
+    ? (wave1 * 0.6 + wave2 * 0.4) * animationConfig.waveAmplitude 
+    : 0;
+  const humanNoiseX = isWritingActive ? ((Math.random() - 0.5) * animationConfig.microNoise) : 0;
+  const humanNoiseY = isWritingActive ? ((Math.random() - 0.5) * animationConfig.microNoise) : 0;
+
+  const handY = handBaseY + writeOffsetY + compoundWaveY + humanNoiseY + externalTop;
+
+  return (
+    <>
+      {/* ১. প্যারাগ্রাফ রেন্ডারার নোড বক্স */}
+      <p
+        ref={containerRef}
+        className={className}
+        style={{
+          ...style,
+          position: 'absolute',
+          display: 'block', // 👈 ফিক্স ১: inline-block এর জায়গায় পিউর block
+          top: style?.top || '0px',
+          left: style?.left || '0px',
+          fontSize: `${fontSize}px`,
+          color: color || style?.color || '#000000',
+          fontFamily: fontFamily,
+          margin: style?.margin || 0,
+          lineHeight: style?.lineHeight || 1.6,
+          width: style?.width || '1600px', 
+          wordBreak: 'keep-all', // 👈 ফিক্স ২: শব্দের মাঝখানে ভাঙা কঠোরভাবে নিষিদ্ধ
+          wordWrap: 'break-word',
+        }}
+      >
+        {flatChars.map((item, idx) => {
+          const isVisible = idx < charsToShow;
+          
+          let Tag = 'span';
+          if (item.type === 'strong' || item.type === 'b') Tag = 'strong';
+          if (item.type === 'i' || item.type === 'em') Tag = 'i';
+          if (item.type === 'u') Tag = 'u';
+
+          return (
+            <Tag
+              key={idx}
+              className={`live-char ${item.className}`}
+              style={{
+                ...item.style,
+                display: 'inline', // 👈 ফিক্স ৩: inline-block এর বদলে পিউর inline ব্যবহার করা হলো যাতে ব্রাউজার স্বাভাবিক শব্দ গঠন বোঝে
+                whiteSpace: 'pre-wrap', // 👈 ফিক্স ৪: pre এর জায়গায় pre-wrap যাতে লাইনের শেষে অটোমেটিক র‍্যাপ হয় কিন্তু স্পেস বজায় থাকে
+                opacity: isVisible ? 1 : 0, 
+              }}
+            >
+              {item.char}
+            </Tag>
+          );
+        })}
+      </p>
+
+      {/* ২. হাত এলিমেন্ট */}
+      {isWritingActive && charPositions.length === totalChars && (
+        <Img
+          src={staticFile("/images/hand/finaHandImg.png")}
+          alt="Hand with pen"
+          style={{
+            position: 'absolute',
+            left: `${handX + humanNoiseX}px`,
+            top: `${handY}px`,
+            width: '180px', 
+            zIndex: 100,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </>
+  );
+};
+
+P.animationType = 'paragraph';
+
+###########################################
+src\components\types\ParagraphBlock.jsx
+###########################################
+import React from 'react';
+
+export const ParagraphBlock = ({ text, progress }) => {
+  const chars = text.split("");
+  const totalChars = chars.length;
+
+  return (
+    <p style={{ fontSize: '48px', color: '#333', margin: 0, width: '750px', lineHeight: '1.4', fontFamily: "'Kalam', cursive", display: 'flex', flexWrap: 'wrap', whiteSpace: 'pre-wrap' }}>
+      {chars.map((char, index) => {
+        const charThreshold = (index / totalChars) * 100;
+        
+        let opacity = 0;
+        if (progress > charThreshold) {
+          opacity = Math.min((progress - charThreshold) / 3, 1);
+        }
+
+        return (
+          <span 
+            key={index} 
+            style={{ 
+              opacity: opacity,
+              transform: `scale(${opacity * 0.05 + 0.95})`,
+              display: 'inline-block'
+            }}
+          >
+            {char === " " ? "\u00A0" : char}
+          </span>
+        );
+      })}
+    </p>
+  );
+};
+
+###########################################
+src\components\types\Table.jsx
+###########################################
+import React, { createContext, useContext, useMemo, useRef, useState, useLayoutEffect } from 'react';
+import { useCurrentFrame, Img, staticFile, interpolate } from 'remotion';
+import { tableAnimationConfig } from '../../whiteboard.config';
+import { parseClassNameToStyle } from '../../utils/styleResolver';
+
+const TableSequenceContext = createContext(null);
+
+const flattenCellNodes = (children) => {
+  const result = [];
+  const traverse = (node) => {
+    if (!node) return;
+    if (typeof node === 'string' || typeof node === 'number') {
+      const str = String(node);
+      for (let char of str) {
+        result.push({ type: 'char', value: char });
+      }
+    } else if (React.isValidElement(node)) {
+      if (node.type === 'img' || node.type === Img) {
+        result.push({ type: 'image', props: node.props });
+      } else {
+        React.Children.forEach(node.props.children, traverse);
+      }
+    }
+  };
+  React.Children.forEach(children, traverse);
+  return result;
+};
+
+// ১. মূল টেবিল র্যাপার কম্পোনেন্ট
+export const Table = ({ children, progress, className = '', style: inlineStyle }) => {
+  const parsedStyle = parseClassNameToStyle(className);
+  const style = { ...parsedStyle, ...inlineStyle };
+  const tableWidth = style?.width ? parseFloat(style.width) : 1700;
+
+  const cellElements = useMemo(() => {
+    const flatCells = [];
+    const collectCells = (node) => {
+      if (!node) return;
+      if (React.isValidElement(node)) {
+        if (node.type === 'td' || node.type === 'th' || node.type === Td || node.type === Th) {
+          flatCells.push(node);
+        } else {
+          React.Children.forEach(node.props.children, collectCells);
+        }
+      } else if (Array.isArray(node)) {
+        node.forEach(collectCells);
+      }
+    };
+    collectCells(children);
+    return flatCells;
+  }, [children]);
+
+  const totalCells = cellElements.length || 1;
+
+  // টেবিল কাঠামো হুট করে পড়া বন্ধ করতে clip-path লজিক (প্রথম ১০% প্রগ্রেসে খালি টেবিল ড্র হবে)
+  let clipPathString = `polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)`;
+  if (progress < 10) {
+    const p = (progress / 10) * 100;
+    if (p <= 50) {
+      clipPathString = `polygon(0% 0%, ${p * 2}% 0%, 0% ${p * 2}%)`;
+    } else {
+      clipPathString = `polygon(0% 0%, 100% 0%, 100% ${(p - 50) * 2}%, ${(p - 50) * 2}% 100%, 0% 100%)`;
+    }
+  }
+
+  return (
+    <TableSequenceContext.Provider value={{ globalProgress: progress, totalCells, tableWidth }}>
+      <div
+        className={className}
+        style={{
+          ...style,
+          position: 'absolute',
+          top: style?.top || '0px',
+          left: style?.left || '0px',
+          width: `${tableWidth}px`,
+          zIndex: style?.zIndex || 10,
+          clipPath: clipPathString,
+          willChange: 'clip-path',
+        }}
+      >
+        <table style={{ width: '100%', borderCollapse: 'collapse', border: '3px solid #000', tableLayout: 'fixed' }}>
+          {children}
+        </table>
+      </div>
+    </TableSequenceContext.Provider>
+  );
+};
+
+// ২. কাস্টম Td কম্পোনেন্ট (NO FLEX, অরিজিনাল P.jsx ট্র্যাকিং আর্কিটেকচার)
+export const Td = ({ children, cellIndex, className = '', style: cellInlineStyle, ...props }) => {
+  const frame = useCurrentFrame();
+  const containerRef = useRef(null); 
+  const context = useContext(TableSequenceContext);
+  const [charPositions, setCharPositions] = useState([]);
+
+  const parsedClasses = parseClassNameToStyle(className);
+  const combinedStyle = { ...parsedClasses, ...cellInlineStyle };
+
+  if (!context) return <td style={combinedStyle} {...props}>{children}</td>;
+
+  const { globalProgress, totalCells, tableWidth } = context;
+
+  // ১০% টেবিল ছক আঁকার পর বাকি ৯০% প্রগ্রেস সমানভাবে সেলগুলোর মধ্যে বন্টন হবে
+  const cellStartPercent = 10 + (cellIndex / totalCells) * 90;
+  const cellEndPercent = 10 + ((cellIndex + 1) / totalCells) * 90;
+
+  const localProgress = interpolate(
+    globalProgress,
+    [cellStartPercent, cellEndPercent],
+    [0, 100],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
+
+  const isCellStarted = globalProgress >= cellStartPercent;
+  const isCellWriting = globalProgress > cellStartPercent && globalProgress < cellEndPercent;
+
+  const flatNodes = useMemo(() => flattenCellNodes(children), [children]);
+  const totalSteps = flatNodes.length || 1;
+
+  const globalCharProgress = (localProgress / 100) * totalSteps;
+  const currentCharIndex = Math.min(Math.floor(globalCharProgress), totalSteps - 1);
+  const charRemainder = globalCharProgress - currentCharIndex;
+  const charsToShow = Math.floor(globalCharProgress);
+
+  // 🎯 আপনার ইঞ্জিনের মেইন ক্লাস '.live-char' ধরে পিউর DOM অফসেট ট্র্যাকিং
+  useLayoutEffect(() => {
+    if (!containerRef.current || !isCellStarted) return;
+    const spans = containerRef.current.querySelectorAll('.live-char');
+    const positions = [];
+    
+    spans.forEach((span) => {
+      positions.push({
+        x: span.offsetLeft + span.offsetWidth, 
+        y: span.offsetTop, 
+        width: span.offsetWidth,
+        height: span.offsetHeight
+      });
+    });
+    
+    // কেবল পজিশন কাউন্ট চেঞ্জ হলেই স্টেট আপডেট হবে, যা ডেডলক লুপ চিরতরে বন্ধ করবে
+    if (positions.length > 0 && positions.length !== charPositions.length) {
+      setCharPositions(positions);
+    }
+  }, [flatNodes, totalSteps, frame, charsToShow, isCellStarted, charPositions.length]); 
+
+  // আপনার ইঞ্জিনের কোর রাইটিং পজিশন গাইডলাইন
+  let handBaseX = 0;
+  let handBaseY = 0;
+
+  if (charPositions.length > 0) {
+    const activeIdx = Math.min(currentCharIndex, charPositions.length - 1);
+    const c1 = charPositions[activeIdx];
+    const c2 = charPositions[Math.min(activeIdx + 1, charPositions.length - 1)];
+
+    if (c2 && c1 && c2.y > c1.y) {
+      handBaseX = charRemainder < 0.1 ? c1.x : c2.x - c2.width;
+      handBaseY = charRemainder < 0.1 ? c1.y : c2.y;
+    } else if (c1) {
+      handBaseX = c1.x + ((c2 ? c2.x : c1.x) - c1.x) * charRemainder;
+      handBaseY = c1.y;
+    }
+  } else {
+    // 🎯 সেফটি ব্যাকআপ লক: ডম পজিশন লোড হতে দেরি হলেও হাত যাতে লিনিয়ারলি এগিয়ে লেখা শুরু করে দেয়
+    const colIndex = cellIndex % 3;
+    const fixedWidthPercent = colIndex === 0 ? 25 : 37.5;
+    const fixedWidthPx = (fixedWidthPercent / 100) * tableWidth;
+    handBaseX = (localProgress / 100) * (fixedWidthPx - 60);
+    handBaseY = localProgress > 60 ? 95 : 35; 
+  }
+
+  // পেনের নিবের পারফেক্ট ইউনিভার্সাল অফসেট
+  const writeOffsetX = -45;
+  const writeOffsetY = 24;
+
+  const handX = handBaseX + writeOffsetX;
+  const handY = handBaseY + writeOffsetY;
+
+  const colIndex = cellIndex % 3;
+  const fixedWidthPercent = colIndex === 0 ? 25 : 37.5;
+
+  return (
+    <td 
+      style={{ 
+        position: 'relative', 
+        padding: '30px 20px', 
+        width: `${fixedWidthPercent}%`,
+        height: '180px', 
+        minHeight: '180px',
+        verticalAlign: 'top', 
+        overflow: 'hidden',
+        fontSize: '45px', 
+        lineHeight: '1.4',
+        visibility: isCellStarted ? 'visible' : 'hidden', // 🚀 কন্টেন্ট ডেডলক এড়াতে নেটিভ CSS কন্ট্রোল
+        ...combinedStyle
+      }} 
+      {...props}
+    >
+      {/* 🚀 কোনো FLEX নেই। পিউর ব্লক ফ্লো যা টেক্সটকে ২ লাইনে সুন্দরভাবে র‍্যাপ করবে */}
+      <div 
+        ref={containerRef} 
+        style={{ 
+          display: 'block', 
+          width: '100%',
+          wordBreak: 'keep-all',   
+          wordWrap: 'break-word',  
+        }}
+      >
+        {flatNodes.map((node, idx) => {
+          const isVisible = idx < charsToShow;
+
+          if (node.type === 'image') {
+            const imagePath = node.props.src.startsWith('/') ? node.props.src : `/${node.props.src}`;
+            const userWidth = node.props.width || '60px';
+            return (
+              <span 
+                key={`img-${idx}`} 
+                className="live-char"
+                style={{ display: 'inline-block', width: userWidth, height: 'auto', marginRight: '12px', verticalAlign: 'middle', opacity: isVisible ? 1 : 0 }}
+              >
+                <Img src={staticFile(imagePath)} style={{ width: '100%', height: 'auto', objectFit: 'contain' }} alt="" />
+              </span>
+            );
+          }
+
+          return (
+            <span 
+              key={`char-${idx}`} 
+              className="live-char"
+              style={{ 
+                display: 'inline', 
+                whiteSpace: 'pre-wrap', 
+                fontFamily: "'Kalam', cursive", 
+                opacity: isVisible ? 1 : 0 
+              }}
+            >
+              {node.value}
+            </span>
+          );
+        })}
+      </div>
+
+      {/* ✒️ পিউর সিঙ্কড রাইটিং হ্যান্ড */}
+      {isCellWriting && (
+        <Img
+          src={staticFile("/images/hand/finaHandImg.png")}
+          alt="Hand writing cell"
+          style={{
+            position: 'absolute',
+            left: `${handX}px`,
+            top: `${handY}px`,
+            width: '180px', 
+            zIndex: 100,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </td>
+  );
+};
+
+// ৩. কাস্টম Th (Table Header Cell) কম্পোনেন্ট
+export const Th = ({ children, cellIndex, className = '', style: cellInlineStyle, ...props }) => {
+  const colIndex = cellIndex % 3;
+  const fixedWidthPercent = colIndex === 0 ? 25 : 37.5;
+  
+  const parsedClasses = parseClassNameToStyle(className);
+  const combinedStyle = { ...parsedClasses, ...cellInlineStyle };
+
+  return (
+    <th 
+      style={{ 
+        backgroundColor: '#f3f4f6', 
+        fontWeight: 'bold', 
+        borderBottom: '3px solid #000',
+        padding: '25px 20px',
+        width: `${fixedWidthPercent}%`,
+        height: '110px',
+        minHeight: '110px',
+        textAlign: 'left',
+        verticalAlign: 'middle',
+        fontSize: '45px',
+        ...combinedStyle 
+      }} 
+      {...props}
+    >
+      {children}
+    </th>
+  );
+};
+
+// ৪. কাস্টম Tr (Table Row) কম্পোনেন্ট
+export const Tr = ({ children, className = '', style, ...props }) => {
+  const parsedClasses = parseClassNameToStyle(className);
+  const combinedStyle = { ...parsedClasses, ...style };
+
+  return (
+    <tr style={{ borderBottom: '2px solid #000', height: '180px', ...combinedStyle }} {...props}>
+      {children}
+    </tr>
+  );
+};
+
+Table.animationType = 'table';
+Table.getTargetElement = (props) => props.children;
+
+###########################################
+src\components\types\WhiteboardEraser.jsx
+###########################################
+import React from 'react';
+import { useCurrentFrame, Img, staticFile } from 'remotion';
+import { parseClassNameToStyle } from '../../utils/styleResolver';
+import { eraserAnimationConfig } from '../../whiteboard.config'; // 👈 কনফিগ ইমপোর্ট করা হলো
+
+const PINK_OVERLAY_SVG = `data:image/svg+xml;utf8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" preserveAspectRatio="none"><rect width="1920" height="1080" fill="#fff" /></svg>',
+)}`;
+
+export const WhiteboardEraser = ({
+  alt = 'Whiteboard Eraser Overlay',
+  progress,
+  className = '',
+  style: inlineStyle,
+}) => {
+  const frame = useCurrentFrame();
+
+  const parsedStyle = parseClassNameToStyle(className);
+  const style = { ...parsedStyle, ...inlineStyle };
+
+  const width = style?.width ? parseFloat(style.width) : 1920;
+  const height = style?.height ? parseFloat(style.height) : 1080;
+  const externalLeft = style?.left ? parseFloat(style.left) : 0;
+  const externalTop = style?.top ? parseFloat(style.top) : 0;
+
+  if (progress === 0) return null;
+
+  // ১. বেস ডায়াগোনাল পাথ
+  const travelProgress = progress / 100;
+  const baseHandX = externalLeft + travelProgress * (width - 180);
+  const baseHandY = externalTop + travelProgress * (height - 180);
+
+  // ==========================================================
+  // 🧼 🎯 কনফিগ থেকে ডাইনামিক ঘষামাজা লজিক
+  // ==========================================================
+  const isWritingActive = progress > 0 && progress < 100;
+
+  // 🚀 এখন সরাসরি আপনার whiteboard.config.js থেকে ভ্যালু দুটি আসছে
+  const scrubFrequency = eraserAnimationConfig.scrubFrequency || 1.6;  
+  const scrubAmplitude = eraserAnimationConfig.scrubAmplitude || 220;  
+
+  // সাইন ওয়েভ মোশন
+  const scrubOffset = isWritingActive 
+    ? Math.sin(frame * scrubFrequency) * scrubAmplitude 
+    : 0;
+
+  const handX = baseHandX + scrubOffset;
+  const handY = baseHandY - (scrubOffset * 0.5); 
+
+  // মাইক্রো ভাইব্রেশন
+  const microNoiseX = isWritingActive ? (Math.random() - 0.5) * 3 : 0;
+  const microNoiseY = isWritingActive ? (Math.random() - 0.5) * 3 : 0;
+
+  // Clip-path লজিক
+  let clipPathString = 'polygon(0% 0%, 0% 0%, 0% 0%)';
+  if (progress > 0) {
+    if (progress <= 50) {
+      const p = progress * 2;
+      clipPathString = `polygon(0% 0%, ${p}% 0%, 0% ${p}%)`;
+    } else {
+      const p = (progress - 50) * 2;
+      clipPathString = `polygon(0% 0%, 100% 0%, 100% ${p}%, ${p}% 100%, 0% 100%)`;
+    }
+  }
+
+  return (
+    <>
+      {/* ১. বোর্ড ইরেজার ওভারলে */}
+      <div
+        className={className}
+        style={{
+          ...style,
+          position: 'absolute',
+          top: `${externalTop}px`,
+          left: `${externalLeft}px`,
+          width: `${width}px`,
+          height: `${height}px`,
+          overflow: 'hidden',
+          clipPath: clipPathString,
+          willChange: 'clip-path',
+          zIndex: 9998,
+        }}
+      >
+        <Img
+          src={PINK_OVERLAY_SVG}
+          alt={alt}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'fill',
+          }}
+        />
+      </div>
+
+      {/* ২. ঘষতে থাকা হাতের এলিমেন্ট */}
+      {isWritingActive && (
+        <Img
+          src={staticFile('/images/hand/finalHandEraser.png')}
+          alt="Rubber hand erasing"
+          style={{
+            position: 'absolute',
+            left: `${handX + microNoiseX}px`,
+            top: `${handY + microNoiseY}px`,
+            width: '180px',
+            zIndex: 9999,
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </>
+  );
+};
+
+WhiteboardEraser.animationType = 'eraser';
+
+###########################################
+src\Composition.jsx
+###########################################
+export const MyComposition = () => {
+  return null;
+};
+
+
+###########################################
+src\fonts.js
+###########################################
+import {fontFamily as kalam, loadFont as loadKalam} from '@remotion/google-fonts/Kalam';
+import {fontFamily as caveat, loadFont as loadCaveat} from '@remotion/google-fonts/Caveat';
+import {fontFamily as patrickHand, loadFont as loadPatrickHand} from '@remotion/google-fonts/PatrickHand';
+import {fontFamily as architectsDaughter, loadFont as loadArchitectsDaughter} from '@remotion/google-fonts/ArchitectsDaughter';
+import {fontFamily as delius, loadFont as loadDelius} from '@remotion/google-fonts/Delius';
+import {fontFamily as fredoka, loadFont as loadFredoka} from '@remotion/google-fonts/Fredoka';
+import {fontFamily as comfortaa, loadFont as loadComfortaa} from '@remotion/google-fonts/Comfortaa';
+import {fontFamily as shadowsIntoLight, loadFont as loadShadowsIntoLight} from '@remotion/google-fonts/ShadowsIntoLight';
+import {fontFamily as amaticSC, loadFont as loadAmaticSC} from '@remotion/google-fonts/AmaticSC';
+import {fontFamily as permanentMarker, loadFont as loadPermanentMarker} from '@remotion/google-fonts/PermanentMarker';
+import {fontFamily as indieFlower, loadFont as loadIndieFlower} from '@remotion/google-fonts/IndieFlower';
+import {fontFamily as justAnotherHand, loadFont as loadJustAnotherHand} from '@remotion/google-fonts/JustAnotherHand';
+import {fontFamily as rockSalt, loadFont as loadRockSalt} from '@remotion/google-fonts/RockSalt';
+import {fontFamily as quicksand, loadFont as loadQuicksand} from '@remotion/google-fonts/Quicksand';
+import {fontFamily as pangolin, loadFont as loadPangolin} from '@remotion/google-fonts/Pangolin';
+
+const latin = ['latin'];
+
+loadKalam('normal', {weights: ['400', '700'], subsets: latin});
+loadCaveat('normal', {weights: ['400', '700'], subsets: latin});
+loadPatrickHand('normal', {weights: ['400'], subsets: latin});
+loadArchitectsDaughter('normal', {weights: ['400'], subsets: latin});
+loadDelius('normal', {weights: ['400'], subsets: latin});
+loadFredoka('normal', {weights: ['400', '700'], subsets: latin});
+loadComfortaa('normal', {weights: ['400', '700'], subsets: latin});
+loadShadowsIntoLight('normal', {weights: ['400'], subsets: latin});
+loadAmaticSC('normal', {weights: ['400', '700'], subsets: latin});
+loadPermanentMarker('normal', {weights: ['400'], subsets: latin});
+loadIndieFlower('normal', {weights: ['400'], subsets: latin});
+loadJustAnotherHand('normal', {weights: ['400'], subsets: latin});
+loadRockSalt('normal', {weights: ['400'], subsets: latin});
+loadQuicksand('normal', {weights: ['400', '700'], subsets: latin});
+loadPangolin('normal', {weights: ['400'], subsets: latin});
+
+export const FONT_FAMILIES = {
+  kalam,
+  caveat,
+  patrickHand,
+  architectsDaughter,
+  delius,
+  fredoka,
+  comfortaa,
+  shadowsIntoLight,
+  amaticSC,
+  permanentMarker,
+  indieFlower,
+  justAnotherHand,
+  rockSalt,
+  quicksand,
+  pangolin,
+};
+
+export const FONT_CLASS_FAMILIES = {
+  'font-kalam': kalam,
+  'font-caveat': caveat,
+  'font-patrick': patrickHand,
+  'font-architect': architectsDaughter,
+  'font-delius': delius,
+  'font-fredoka': fredoka,
+  'font-comfortaa': comfortaa,
+  'font-shadow': shadowsIntoLight,
+  'font-amatic': amaticSC,
+  'font-marker': permanentMarker,
+  'font-indie': indieFlower,
+  'font-another-hand': justAnotherHand,
+  'font-rock-salt': rockSalt,
+  'font-quicksand': quicksand,
+  'font-pangolin': pangolin,
+};
+
+const getClassList = (className = '') => className.split(/\s+/).filter(Boolean);
+
+export const resolveFontStyles = ({style = {}, className = ''}) => {
+  const classes = getClassList(className);
+  const familyFromClass = classes.find((name) => FONT_CLASS_FAMILIES[name]);
+
+  return {
+    fontFamily:
+      style.fontFamily ||
+      (familyFromClass ? `'${FONT_CLASS_FAMILIES[familyFromClass]}', cursive, sans-serif` : `'${kalam}', cursive, sans-serif`),
+    fontStyle: style.fontStyle || (classes.includes('italic') ? 'italic' : 'normal'),
+    fontWeight:
+      style.fontWeight ||
+      (classes.includes('bold') || classes.includes('font-bold') ? 700 : 400),
+  };
+};
+
+
+###########################################
+src\index.css
+###########################################
+
+
+###########################################
+src\index.js
+###########################################
+import './master.css';
+import './index.css';
+import './fonts';
+import { registerRoot } from "remotion";
+import { RemotionRoot } from "./Root";
+
+registerRoot(RemotionRoot);
+
+
+###########################################
+src\MainVideoEngine.jsx
+###########################################
+import React from 'react';
+import { AbsoluteFill, Sequence } from 'remotion';
+import { RevealElement, RevealSequence } from './components/RevealElement';
+import { WhiteboardEraser } from './components/types/WhiteboardEraser';
+import { getSequenceDurationInFrames } from './whiteboard.config';
+
+import { H1 } from './components/types/H1';
+import { Hr } from './components/types/Hr';
+import { P } from './components/types/P';
+import { Image } from './components/types/Image';
+import { Table, Tr, Th, Td } from './components/types/Table'; // নতুন তৈরি করা টেবিল কম্পোনেন্ট
+// ==========================================================================
+// 🚀 NEW SCENE: MCP BASIC FLOW (User -> AI App -> MCP Server -> Tools)
+// ==========================================================================
+import { ArrowWithText } from './components/types/ArrowWithText';
+import { DynamicArrow } from './components/types/DynamicArrow';
+
+
+
+export const mcpBasicFlowSequence = [
+  // --------------------------------------------------
+  // 0. MAIN TITLE
+  // --------------------------------------------------
+  <RevealElement key="mcp-flow-title" sequenceId={1}>
+    <H1 className="font-kalam top-60 left-100 text-6xl text-black font-bold w-full">
+      MCP (Model Context Protocol) - Basic Flow
+    </H1>
+  </RevealElement>,
+
+  // --------------------------------------------------
+  // 1. BLOCK 01: USER NODE
+  // --------------------------------------------------
+  <RevealElement key="block-01-user" sequenceId={2}>
+    <Image 
+      src="/diagram/images/diagram/01.PNG" 
+      alt="1. USER"
+      className="top-220 left-40 w-280 h-600 object-contain" 
+    />
+  </RevealElement>,
+
+  // --------------------------------------------------
+  // 2. FLOW BETWEEN USER & AI APP (Arrow + Text)
+  // --------------------------------------------------
+  // Top Arrow: Question / Request (User -> AI App)
+  <RevealElement key="flow-user-to-ai" sequenceId={3}>
+    <ArrowWithText 
+      startX={345} 
+      startY={400} 
+      endX={475} 
+      endY={400} 
+      text="Question / Request" 
+      textPosition="top" 
+      color="#000000"
+      className="font-kalam text-2xl text-black"
+      thickness={4}
+    />
+  </RevealElement>,
+
+  // Bottom Arrow: Response / Answer (AI App -> User)
+  <RevealElement key="flow-ai-to-user" sequenceId={4}>
+    <ArrowWithText 
+      startX={475} 
+      startY={580} 
+      endX={345} 
+      endY={580} 
+      text="Response / Answer" 
+      textPosition="bottom" 
+      color="#000000"
+      thickness={4}
+      className="font-kalam text-2xl text-black"
+    />
+  </RevealElement>,
+
+  // --------------------------------------------------
+  // 3. BLOCK 02: AI APPLICATION NODE
+  // --------------------------------------------------
+  <RevealElement key="block-02-ai-app" sequenceId={5}>
+    <Image 
+      src="/diagram/images/diagram/02.PNG" 
+      alt="2. AI APPLICATION"
+      className="top-180 left-495 w-320 h-730 object-contain" 
+    />
+  </RevealElement>,
+
+  // --------------------------------------------------
+  // 4. FLOW BETWEEN AI APP & MCP SERVER (Arrow + Sub-text)
+  // --------------------------------------------------
+  // Top Flow: 3. MCP Request & Sub-text
+  <RevealElement key="flow-ai-to-server" sequenceId={6}>
+    <ArrowWithText 
+      startX={835} 
+      startY={380} 
+      endX={1085} 
+      endY={380} 
+      text="3. MCP Request" 
+      textPosition="top" 
+      color="#7e22ce" // Purple color matching image theme
+      className="font-kalam text-3xl text-purple"
+      thickness={4}
+    />
+  </RevealElement>,
+  <RevealElement key="label-mcp-request-sub" sequenceId={7}>
+   <P className="font-kalam top-460 left-960 text-2xl w-400 text-center text-gray" style={{ transform: 'translateX(-50%)' }}>
+    (Discover / List / Call Tool)
+  </P>
+  </RevealElement>,
+
+  // Bottom Flow: 4. MCP Response & Sub-text
+  <RevealElement key="flow-server-to-ai" sequenceId={8}>
+    <ArrowWithText 
+      startX={1085} 
+      startY={630} 
+      endX={835} 
+      endY={630} 
+      text="4. MCP Response" 
+      textPosition="bottom" 
+      color="#7e22ce"
+      className="font-kalam text-3xl text-purple"
+      thickness={4}
+    />
+  </RevealElement>,
+  <RevealElement key="label-mcp-response-sub" sequenceId={9}>
+    <P className="font-kalam top-690 left-960 text-2xl w-400 text-center" style={{ transform: 'translateX(-50%)' }}>
+      (Result / Data)
+    </P>
+  </RevealElement>,
+
+  // --------------------------------------------------
+  // 5. BLOCK 03: MCP SERVER NODE
+  // --------------------------------------------------
+  <RevealElement key="block-03-mcp-server" sequenceId={10}>
+    <Image 
+      src="/diagram/images/diagram/03.PNG" 
+      alt="3. MCP SERVER"
+      className="top-200 left-1100 w-340 h-700 object-contain" 
+    />
+  </RevealElement>,
+
+  // --------------------------------------------------
+  // 6. BLOCK 04: EXTERNAL TOOLS / DATA SOURCES
+  // --------------------------------------------------
+  <RevealElement key="block-04-external-tools" sequenceId={11}>
+    <Image 
+      src="/diagram/images/diagram/04.PNG" 
+      alt="4. EXTERNAL TOOLS"
+      className="top-170 left-1520 w-320 h-800 object-contain" 
+    />
+  </RevealElement>,
+
+  // --------------------------------------------------
+  // 7. MULTIPLE TWO-WAY CONNECTORS TO SUB-TOOLS
+  // --------------------------------------------------
+  // Connectors dynamically drawn to five stacked tools (Database, Web API, etc.)
+  <RevealElement key="arrow-tool-1" sequenceId={12}>
+    <DynamicArrow startX={1455} startY={285} endX={1510} endY={285} color="#000000" thickness={3} />
+  </RevealElement>,
+  <RevealElement key="arrow-tool-2" sequenceId={13}>
+    <DynamicArrow startX={1455} startY={445} endX={1510} endY={445} color="#000000" thickness={3} />
+  </RevealElement>,
+  <RevealElement key="arrow-tool-3" sequenceId={14}>
+    <DynamicArrow startX={1455} startY={605} endX={1510} endY={605} color="#000000" thickness={3} />
+  </RevealElement>,
+  <RevealElement key="arrow-tool-4" sequenceId={15}>
+    <DynamicArrow startX={1455} startY={765} endX={1510} endY={765} color="#000000" thickness={3} />
+  </RevealElement>,
+  <RevealElement key="arrow-tool-5" sequenceId={16}>
+    <DynamicArrow startX={1455} startY={915} endX={1510} endY={915} color="#000000" thickness={3} />
+  </RevealElement>,
+
+  // --------------------------------------------------
+  // 8. ERASER CLEANUP FOR NEXT SCENE
+  // --------------------------------------------------
+  <RevealElement key="eraser-mcp-flow" sequenceId={17}>
+    <WhiteboardEraser />
+  </RevealElement>,
+];
+
+
+
+
+
+// ==========================================
+// SCENE 01: মূল সিন - হেডিং, প্যারাগ্রাফ, ইমেজ ইত্যাদি
+// ==========================================
+export const scene01Sequence = [
+  <RevealElement key="heading" sequenceId={1}>
+    <H1 className="font-kalam top-80 left-100 text-8xl text-blue w-full">
+      Welcome to MCP Thank you
+    </H1>
+  </RevealElement>,
+
+  <RevealElement key="second-heading" sequenceId={2}>
+    <H1 className="font-marker top-180 left-100 text-5xl text-orange w-full">
+      Different fonts, same animation
+    </H1>
+  </RevealElement>,
+
+  <RevealElement key="underline" sequenceId={3}>
+    <Hr className="top-250 left-100 w-1200 h-10 text-green w-1350" />
+  </RevealElement>,
+
+  <RevealElement key="mcp-hub-image" sequenceId={4}>
+    <Image 
+      src="/images/mcpimg.png" 
+      alt="MCP Hub Diagram"
+      className="top-250 left-100 w-380 h-380 object-contain" 
+    />
+  </RevealElement>,
+
+  <RevealElement key="paragraph" sequenceId={5}>
+    <P className="font-kalam top-350 left-700 text-4xl w-1100 leading-relaxed">
+      <strong>MCP (Model Context Protocol)</strong> is a{' '}
+      <span className="text-red">new standard</span>{' '}
+      that enables AI models to{' '}
+      <span className="bg-yellow rounded px-2">communicate with external tools</span>{' '}
+      in a <u className="underline-green">secure and structured way</u>. It eliminates{' '}
+      <span className="text-blue font-bold">custom integrations</span>, improves{' '}
+      <span className="text-emerald italic">developer productivity</span>, and makes AI agents{' '}
+      <span className="bg-purple rounded px-2"><strong className="font-bold">more reliable</strong></span> for{' '}
+      <span className="underline-thick-red">real-world applications</span>.
+    </P>
+  </RevealElement>,
+
+  <RevealElement key="eraser-scene01" sequenceId={6}>
+    <WhiteboardEraser />
+  </RevealElement>,
+];
+
+// ==========================================
+// SCENE 02: দ্বিতীয় সিন - হেডার এবং ইমেজ
+// ==========================================
+export const scene02Sequence = [
+  <RevealElement key="scene2-heading" sequenceId={1}>
+    <H1 className="font-kalam top-100 left-100 text-7xl text-purple w-1350">
+      Scene 02: Advanced Features
+    </H1>
+  </RevealElement>,
+
+  <RevealElement key="scene2-image" sequenceId={2}>
+    <Image 
+      src="/images/mcpclients.png" 
+      alt="Advanced Features"
+      className="top-300 left-100 w-500 h-500 object-contain w-1350" 
+    />
+  </RevealElement>,
+
+  <RevealElement key="scene2-description" sequenceId={3}>
+    <P className="font-kalam top-700 left-700 text-3xl w-1100 leading-relaxed text-gray-700">
+      Explore the powerful capabilities and integrations available in the MCP ecosystem.
+    </P>
+  </RevealElement>,
+
+  <RevealElement key="eraser-scene02" sequenceId={4}>
+    <WhiteboardEraser />
+  </RevealElement>,
+];
+
+// ==========================================
+// SCENE 04: নতুন টেবিল কম্পারিসন সিন (MCP vs LangGraph)
+// ==========================================
+export const scene04Sequence = [
+  <RevealElement key="scene4-heading" sequenceId={1}>
+    <H1 className="font-kalam top-80 left-100 text-6xl text-black font-bold w-full">
+      Comparison: MCP vs LangGraph
+    </H1>
+  </RevealElement>,
+
+<RevealElement key="comparison-table" sequenceId={2}>
+    <Table className="top-220 left-100 w-1700 font-kalam">
+      <thead>
+        <Tr className="bg-gray-100 border-bottom-3">
+          <Th cellIndex={0} className="text-left text-5xl border-right-2">Aspect</Th>
+          <Th cellIndex={1} className="text-left text-5xl text-blue border-right-2">MCP</Th>
+          <Th cellIndex={2} className="text-left text-5xl text-green">LangGraph</Th>
+        </Tr>
+      </thead>
+      <tbody>
+        {/* ROW 1: Role */}
+        <Tr className="border-bottom-2">
+          <Td cellIndex={3} className="font-bold border-right-2">
+            <img src="/images/topicSymbolRole.png" width="120px" alt="Role" /> Role
+          </Td>
+          <Td cellIndex={4} className="font-bold text-4xl text-blue border-right-2">
+            Protocol / Standard
+          </Td>
+          <Td cellIndex={5} className="font-bold text-4xl text-emerald">
+            Framework / Library
+          </Td>
+        </Tr>
+        {/* ROW 2: Purpose */}
+        <Tr className="border-bottom-2">
+          <Td cellIndex={6} className="font-bold text-4xl border-right-2">
+            <img src="/images/topicSymbolPurpose.png" width="120px" alt="Purpose" /> Purpose
+          </Td>
+          <Td cellIndex={7} className="text-black text-4xl border-right-2">
+            Connect AI models with external tools and data sources
+          </Td>
+          <Td cellIndex={8} className="text-black text-4xl">
+            Build stateful, multistep agent workflows
+          </Td>
+        </Tr>
+      </tbody>
+    </Table>
+  </RevealElement>,
+
+  <RevealElement key="eraser-scene04" sequenceId={3}>
+    <WhiteboardEraser />
+  </RevealElement>,
+];
+
+// ==========================================
+// SCENE 03: তৃতীয় সিন - ধন্যবাদ স্লাইড
+// ==========================================
+export const scene03Sequence = [
+  <RevealElement key="scene3-thank-you" sequenceId={1}>
+    <H1 className="font-kalam top-400 left-100 text-9xl text-blue font-bold w-1350">
+      Thank You!
+    </H1>
+  </RevealElement>,
+
+  <RevealElement key="scene3-subtitle" sequenceId={2}>
+    <P className="font-marker top-600 left-100 text-5xl text-orange w-1350">
+      Keep building amazing things with MCP
+    </P>
+  </RevealElement>,
+];
+
+// ব্যাকওয়ার্ড কম্প্যাটিবিলিটির জন্য
+export const mainVideoSequence = scene01Sequence;
+
+// সিন কন্টেইনারস
+const Scene01Container = () => (
+  <AbsoluteFill id="scene-01">
+    <RevealSequence>{scene01Sequence}</RevealSequence>
+  </AbsoluteFill>
+);
+
+const Scene02Container = () => (
+  <AbsoluteFill id="scene-02">
+    <RevealSequence>{scene02Sequence}</RevealSequence>
+  </AbsoluteFill>
+);
+
+const Scene04Container = () => (
+  <AbsoluteFill id="scene-04">
+    <RevealSequence>{scene04Sequence}</RevealSequence>
+  </AbsoluteFill>
+);
+
+const Scene03Container = () => (
+  <AbsoluteFill id="scene-03">
+    <RevealSequence>{scene03Sequence}</RevealSequence>
+  </AbsoluteFill>
+);
+
+// ==========================================
+// SCENE 05: নতুন ফ্লো ডায়াগ্রাম সিন কন্টেইনার
+// ==========================================
+const Scene05Container = () => (
+  <AbsoluteFill id="scene-05">
+    <RevealSequence>{mcpBasicFlowSequence}</RevealSequence>
+  </AbsoluteFill>
+);
+
+// ==========================================
+// 🚀 MAIN ENGINE COMPONENT
+// ==========================================
+export const MainVideoEngine = () => {
+  const FPS = 30;
+
+  // প্রতিটি সিনের ফ্রেম ডিউরেশন ক্যালকুলেট করা
+  const scene01Duration = getSequenceDurationInFrames(scene01Sequence, FPS);
+  const scene02Duration = getSequenceDurationInFrames(scene02Sequence, FPS);
+  const scene04Duration = getSequenceDurationInFrames(scene04Sequence, FPS);
+  const scene03Duration = getSequenceDurationInFrames(scene03Sequence, FPS);
+  const scene05Duration = getSequenceDurationInFrames(mcpBasicFlowSequence, FPS);
+
+
+  // গ্লোবাল টাইমলাইন ফ্রেম ট্র্যাকিং
+  let currentFrame = 0;
+  
+  const scene01StartFrame = currentFrame;
+  currentFrame += scene01Duration;
+  
+  const scene02StartFrame = currentFrame;
+  currentFrame += scene02Duration;
+
+  // টেবিল সিনটিকে ৩ নম্বর সিনের (Thank you) আগে প্লেস করা হলো লজিক্যালি
+  const scene04StartFrame = currentFrame;
+  currentFrame += scene04Duration;
+
+  const scene05StartFrame = currentFrame;
+  currentFrame += scene05Duration;
+  
+  const scene03StartFrame = currentFrame;
+
+  return (
+    <AbsoluteFill style={{ backgroundColor: 'white', fontFamily: 'sans-serif' }}>
+      
+      {/* SCENE 01 */}
+      <Sequence from={scene01StartFrame} durationInFrames={scene01Duration}>
+        <Scene01Container />
+      </Sequence>
+
+      {/* SCENE 02 */}
+      <Sequence from={scene02StartFrame} durationInFrames={scene02Duration}>
+        <Scene02Container />
+      </Sequence>
+
+      {/* SCENE 04 (Table Comparison) */}
+      <Sequence from={scene04StartFrame} durationInFrames={scene04Duration}>
+        <Scene04Container />
+      </Sequence>
+
+      {/* 🔥 SCENE 05 (New Flow Diagram Scene) */}
+      <Sequence from={scene05StartFrame} durationInFrames={scene05Duration}>
+        <Scene05Container />
+      </Sequence>
+
+      {/* SCENE 03 (Thank You Slide) */}
+      <Sequence from={scene03StartFrame} durationInFrames={scene03Duration}>
+        <Scene03Container />
+      </Sequence>
+
+    </AbsoluteFill>
+  );
+};
+
+###########################################
+src\master.css
+###########################################
+/* ==========================================================================
+   🎯 WHITEBOARD ENGINE - MEGA TAILWIND-STYLE UTILITY LIBRARY
+   ========================================================================== */
+
+/* --------------------------------------------------
+   🎨 1. TEXT COLORS (মার্কার ও ক্যালিগ্রাফি শেডস)
+   -------------------------------------------------- */
+.text-black        { color: #000000; }
+.text-white        { color: #ffffff; }
+.text-gray         { color: #4b5563; } /* Gray-600 */
+.text-light-gray   { color: #9ca3af; } /* Gray-400 */
+
+/* ব্রাইট মার্কার কালারস */
+.text-red          { color: #e11d48; } /* Rose-600 */
+.text-blue         { color: #1d4ed8; } /* Blue-700 */
+.text-cyan         { color: #0284c7; } /* Sky-600 */
+.text-green        { color: #10b981; } /* Emerald-500 */
+.text-emerald      { color: #047857; } /* Emerald-700 */
+.text-purple       { color: #7e22ce; } /* Purple-700 */
+.text-fuchsia      { color: #c026d3; } /* Fuchsia-600 */
+.text-pink         { color: #db2777; } /* Pink-600 */
+.text-orange       { color: #ea580c; } /* Orange-600 */
+.text-yellow       { color: #d97706; } /* Amber-600 */
+
+/* --------------------------------------------------
+   🎨 2. BACKGROUND COLORS (বোর্ড ও কন্টেইনার শেডস)
+   -------------------------------------------------- */
+.bg-black          { background-color: #000000; }
+.bg-white          { background-color: #ffffff; }
+.bg-gray-50        { background-color: #f9fafb; }
+.bg-gray-100       { background-color: #f3f4f6; }
+
+/* সলিড লাইট ব্যাকগ্রাউন্ড */
+.bg-red            { background-color: #ffe4e6; } /* Rose-100 */
+.bg-blue           { background-color: #dbeafe; } /* Blue-100 */
+.bg-cyan           { background-color: #e0f2fe; } /* Sky-100 */
+.bg-green          { background-color: #d1fae5; } /* Emerald-100 */
+.bg-purple         { background-color: #f3e8ff; } /* Purple-100 */
+.bg-orange         { background-color: #ffedd5; } /* Orange-100 */
+.bg-yellow         { background-color: #fef9c3; } /* Yellow-100 */
+
+/* --------------------------------------------------
+   ✒️ 3. FONT SIZE UTILITIES (ডাইনামিক টেক্সট স্কেলিং ক্লাস)
+   -------------------------------------------------- */
+.text-xs    { font-size: 16px; }
+.text-sm    { font-size: 20px; }
+.text-base  { font-size: 24px; }
+.text-lg    { font-size: 28px; }
+.text-xl    { font-size: 32px; }
+.text-2xl   { font-size: 38px; }
+.text-3xl   { font-size: 45px; }
+.text-4xl   { font-size: 52px; }  /* স্ট্যান্ডার্ড প্যারাগ্রাফ সাইজ */
+.text-5xl   { font-size: 64px; }  /* সাব-হেডিং সাইজ */
+.text-6xl   { font-size: 75px; }  /* নরমাল হেডিং সাইজ */
+.text-7xl   { font-size: 85px; }  
+.text-8xl   { font-size: 95px; }  /* আপনার মেগা হেডিং সাইজ (১০০% লক) */
+.text-9xl   { font-size: 110px; }
+
+/* ==========================================================================
+   📌 4. TOP & LEFT POSITIONING CLASSES (Extended Resolution Grid Lock)
+   ========================================================================== */
+
+/* --------------------------------------------------
+   🔽 --- TOP POSITIONS (0px to 1000px+) ---
+   -------------------------------------------------- */
+.top-0     { top: 0px; }
+.top-5     { top: 5px; }
+.top-10    { top: 10px; }
+.top-15    { top: 15px; }
+.top-20    { top: 20px; }
+.top-25    { top: 25px; }
+.top-30    { top: 30px; }
+.top-35    { top: 35px; }
+.top-40    { top: 40px; }
+.top-45    { top: 45px; }
+.top-50    { top: 50px; }
+.top-60    { top: 60px; }
+.top-70    { top: 70px; }
+.top-80    { top: 80px; }   /* আপনার হেডিংয়ের পারফেক্ট বেস টপ */
+.top-90    { top: 90px; }
+.top-100   { top: 100px; }
+.top-110   { top: 110px; }
+.top-120   { top: 120px; }
+.top-130   { top: 130px; }
+.top-140   { top: 140px; }
+.top-150   { top: 150px; }
+.top-160   { top: 160px; }
+.top-170   { top: 170px; }
+.top-180   { top: 180px; }
+.top-190   { top: 190px; }
+.top-200   { top: 200px; }  /* আন্ডারলাইন ও ২য় লাইনের বেস টপ */
+.top-210   { top: 210px; }
+.top-220   { top: 220px; }
+.top-230   { top: 230px; }
+.top-240   { top: 240px; }
+.top-250   { top: 250px; }
+.top-260   { top: 260px; }
+.top-270   { top: 270px; }
+.top-280   { top: 280px; }
+.top-290   { top: 290px; }
+.top-300   { top: 300px; }
+
+/* ৫০ পিক্সেল গ্যাপে মেগা স্ক্রিন টপ স্কেলিং */
+.top-350   { top: 350px; }
+.top-400   { top: 400px; }
+.top-450   { top: 450px; }
+.top-500   { top: 500px; }
+.top-550   { top: 550px; }
+.top-600   { top: 600px; }
+.top-650   { top: 650px; }
+.top-700   { top: 700px; }
+.top-750   { top: 750px; }
+.top-800   { top: 800px; }
+.top-850   { top: 850px; }
+.top-900   { top: 900px; }
+.top-950   { top: 950px; }
+.top-1000  { top: 1000px; }
+.top-1100  { top: 1100px; }
+.top-1200  { top: 1200px; }
+
+/* --------------------------------------------------
+   ▶️ --- LEFT POSITIONS (0px to 1500px+) ---
+   -------------------------------------------------- */
+.left-0     { left: 0px; }
+.left-5     { left: 5px; }
+.left-10    { left: 10px; }
+.left-15    { left: 15px; }
+.left-20    { left: 20px; }
+.left-25    { left: 25px; }
+.left-30    { left: 30px; }
+.left-35    { left: 35px; }
+.left-40    { left: 40px; }
+.left-45    { left: 45px; }
+.left-50    { left: 50px; }
+.left-60    { left: 60px; }
+.left-70    { left: 70px; }
+.left-80    { left: 80px; }
+.left-90    { left: 90px; }
+.left-100   { left: 100px; } /* আপনার মেইন কনটেন্টের পারফেক্ট বাম মার্জিন */
+.left-110   { left: 110px; }
+.left-120   { left: 120px; }
+.left-130   { left: 130px; }
+.left-140   { left: 140px; }
+.left-150   { left: 150px; }
+.left-160   { left: 160px; }
+.left-170   { left: 170px; }
+.left-180   { left: 180px; }
+.left-190   { left: 190px; }
+.left-200   { left: 200px; }
+.left-220   { left: 220px; }
+.left-240   { left: 240px; }
+.left-250   { left: 250px; }
+.left-260   { left: 260px; }
+.left-280   { left: 280px; }
+.left-300   { left: 300px; }
+
+/* ৫০ পিক্সেল গ্যাপে ফুল এইচডি হরিজন্টাল লেফট স্কেলিং */
+.left-350   { left: 350px; }
+.left-400   { left: 400px; }
+.left-450   { left: 450px; }
+.left-500   { left: 500px; }
+.left-550   { left: 550px; }
+.left-600   { left: 600px; }
+.left-650   { left: 650px; }
+.left-700   { left: 700px; }
+.left-750   { left: 750px; }
+.left-800   { left: 800px; }
+.left-850   { left: 850px; }
+.left-900   { left: 900px; }
+.left-950   { left: 950px; }
+.left-1000  { left: 1000px; }
+.left-1100  { left: 1100px; }
+.left-1200  { left: 1200px; }
+.left-1300  { left: 1300px; }
+.left-1400  { left: 1400px; }
+.left-1500  { left: 1500px; }
+
+/* --------------------------------------------------
+   💛 5. HIGHLIGHT VARIETIES (রিয়েল টেক্সট মার্কার ভ্যারাইটি)
+   -------------------------------------------------- */
+/* --- লাইট/প্যাস্টেল শেডস (আপনার আগেরগুলো) --- */
+.highlight-yellow   { background-color: #fef08a; border-radius: 4px; padding: 0px 6px; } 
+.highlight-purple   { background-color: #e9d5ff; border-radius: 4px; padding: 0px 6px; } 
+.highlight-green    { background-color: #a7f3d0; border-radius: 4px; padding: 0px 6px; } 
+.highlight-blue     { background-color: #bfdbfe; border-radius: 4px; padding: 0px 6px; } 
+.highlight-orange   { background-color: #ffedd5; border-radius: 4px; padding: 0px 6px; } 
+.highlight-pink     { background-color: #fbcfe8; border-radius: 4px; padding: 0px 6px; } 
+.highlight-cyan     { background-color: #bae6fd; border-radius: 4px; padding: 0px 6px; } 
+
+/* 🔥 --- নতুন মেগা ডিপ হাইলাইটার কালেকশন (Deep & High-Contrast) --- */
+.highlight-deep-red {
+  background-color: #be123c; /* Rose-700 */
+  color: #ffffff !important;  /* ডিপ কালারে লেখা অটোমেটিক সাদা হয়ে ফুটবে */
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-blue {
+  background-color: #1d4ed8; /* Blue-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-green {
+  background-color: #047857; /* Emerald-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-purple {
+  background-color: #6b21a8; /* Purple-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-orange {
+  background-color: #c2410c; /* Orange-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-pink {
+  background-color: #be185d; /* Pink-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-cyan {
+  background-color: #0369a1; /* Sky-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-yellow {
+  background-color: #b45309; /* Amber-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+
+
+/* --------------------------------------------------
+   🔴 6. UNDERLINE STYLES (মাল্টি-কালার মার্কার ও চকবোর্ড স্ট্রোক)
+   -------------------------------------------------- */
+
+/* --- 🔹 ক) সলিড ৪ পিক্সেল স্ট্যান্ডার্ড আন্ডারলাইন --- */
+u {
+   text-decoration: none;
+}
+.underline-red          { border-bottom: 4px solid #e11d48; } /* Rose-600 */
+.underline-blue         { border-bottom: 4px solid #1d4ed8; } /* Blue-700 */
+.underline-green        { border-bottom: 4px solid #10b981; } /* Emerald-500 */
+.underline-black        { border-bottom: 4px solid #000000; }
+.underline-purple       { border-bottom: 4px solid #7e22ce; } /* Purple-700 */
+.underline-orange       { border-bottom: 4px solid #ea580c; } /* Orange-600 */
+.underline-cyan         { border-bottom: 4px solid #0284c7; } /* Sky-600 */
+.underline-fuchsia      { border-bottom: 4px solid #c026d3; } /* Fuchsia-600 */
+.underline-pink         { border-bottom: 4px solid #db2777; } /* Pink-600 */
+.underline-yellow       { border-bottom: 4px solid #d97706; } /* Amber-600 */
+.underline-lime         { border-bottom: 4px solid #65a30d; } /* Lime-600 */
+
+/* --- 🔹 খ) ডাবল স্ট্রোক আন্ডারলাইন (মেগা হাই-কন্ট্রাস্ট) --- */
+.underline-double-red     { border-bottom: 5px double #e11d48; }
+.underline-double-blue    { border-bottom: 5px double #1d4ed8; }
+.underline-double-green   { border-bottom: 5px double #10b981; }
+.underline-double-black   { border-bottom: 5px double #000000; }
+.underline-double-purple  { border-bottom: 5px double #7e22ce; }
+.underline-double-cyan    { border-bottom: 5px double #0284c7; }
+.underline-double-fuchsia { border-bottom: 5px double #c026d3; }
+.underline-double-orange  { border-bottom: 5px double #ea580c; }
+
+/* --- 🔹 গ) ড্যাশড (Dashed) স্ট্রোক কালেকশন --- */
+.underline-dashed-red     { border-bottom: 3px dashed #e11d48; }
+.underline-dashed-blue    { border-bottom: 3px dashed #1d4ed8; }
+.underline-dashed-green   { border-bottom: 3px dashed #10b981; }
+.underline-dashed-black   { border-bottom: 3px dashed #000000; }
+.underline-dashed-purple  { border-bottom: 3px dashed #7e22ce; }
+.underline-dashed-cyan    { border-bottom: 3px dashed #0284c7; }
+
+/* --- 🔹 ঘ) ডটেড (Dotted) মার্কার ট্রেইলস (নতুন) --- */
+.underline-dotted-red     { border-bottom: 4px dotted #e11d48; }
+.underline-dotted-blue    { border-bottom: 4px dotted #1d4ed8; }
+.underline-dotted-green   { border-bottom: 4px dotted #10b981; }
+.underline-dotted-black   { border-bottom: 4px dotted #000000; }
+.underline-dotted-purple  { border-bottom: 4px dotted #7e22ce; }
+.underline-dotted-fuchsia { border-bottom: 4px dotted #c026d3; }
+
+/* --- 🔹 ঙ) আল্ট্রা-থিক থিকনেস মেগা স্ট্রোক (6px - হেডিং বা বোল্ড টেক্সটের নিচে দেওয়ার জন্য) --- */
+.underline-thick-red      { border-bottom: 6px solid #e11d48; }
+.underline-thick-blue     { border-bottom: 6px solid #1d4ed8; }
+.underline-thick-green    { border-bottom: 6px solid #10b981; }
+.underline-thick-purple   { border-bottom: 6px solid #7e22ce; }
+.underline-thick-yellow   { border-bottom: 6px solid #d97706; }
+
+
+
+/* --------------------------------------------------
+   ✒️ 7. FONT STYLES & WEIGHTS
+   -------------------------------------------------- */
+.bold, .font-bold { font-weight: 700; }
+.italic           { font-style: italic; }
+.font-normal      { font-weight: 400; }
+
+/* --------------------------------------------------
+   📍 8. POSITIONING SYSTEM (আপনার ইঞ্জিনের মেইন চাবি)
+   -------------------------------------------------- */
+.absolute { position: absolute; }
+.relative { position: relative; }
+.static   { position: static; }
+.fixed   { position: fixed; }
+
+/* --------------------------------------------------
+   📦 9. PADDING UTILITIES (P)
+   -------------------------------------------------- */
+.p-0 { padding: 0px; }
+.p-1 { padding: 4px; }
+.p-2 { padding: 8px; }
+.p-3 { padding: 12px; }
+.p-4 { padding: 16px; }
+.p-5 { padding: 20px; }
+
+/* Horizontal (Left-Right) Padding */
+.px-1 { padding-left: 4px; padding-right: 4px; }
+.px-2 { padding-left: 8px; padding-right: 8px; }
+.px-3 { padding-left: 12px; padding-right: 12px; }
+.px-4 { padding-left: 16px; padding-right: 16px; }
+
+/* Vertical (Top-Bottom) Padding */
+.py-1 { padding-top: 4px; padding-bottom: 4px; }
+.py-2 { padding-top: 8px; padding-bottom: 8px; }
+.py-3 { padding-top: 12px; padding-bottom: 12px; }
+.py-4 { padding-top: 16px; padding-bottom: 16px; }
+
+/* --------------------------------------------------
+   📦 10. MARGIN UTILITIES (M)
+   -------------------------------------------------- */
+.m-0 { margin: 0px; }
+.m-1 { margin: 4px; }
+.m-2 { margin: 8px; }
+.m-3 { margin: 12px; }
+.m-4 { margin: 16px; }
+.mx-auto { margin-left: auto; margin-right: auto; }
+
+
+
+/* ==========================================================================
+   🔳 11. BORDERS & RADIUS - Mega Style & Thickness Grid
+   ========================================================================== */
+
+/* --- 🔹 ক) বর্ডার থিকনেস (Border Thickness) --- */
+.border-0 { border-width: 0px; }
+.border   { border: 2px solid #e5e7eb; } /* ডিফল্ট টেলউইন্ড স্টাইল */
+.border-1 { border-width: 1px; }
+.border-2 { border-width: 2px; }
+.border-3 { border-width: 3px; }
+.border-4 { border-width: 4px; }
+.border-6 { border-width: 6px; }
+.border-8 { border-width: 8px; } /* হোয়াইটবোর্ড মেগা ফ্রেমের জন্য */
+
+/* --- 🔹 খ) বর্ডার কালারস (Border Colors) --- */
+.border-black        { border-color: #000000; }
+.border-white        { border-color: #ffffff; }
+.border-gray         { border-color: #9ca3af; } /* Gray-400 */
+.border-red          { border-color: #e11d48; } /* Rose-600 */
+.border-blue         { border-color: #1d4ed8; } /* Blue-700 */
+.border-green        { border-color: #10b981; } /* Emerald-500 */
+.border-purple       { border-color: #7e22ce; } /* Purple-700 */
+.border-orange       { border-color: #ea580c; } /* Orange-600 */
+.border-cyan         { border-color: #0284c7; } /* Sky-600 */
+.border-fuchsia      { border-color: #c026d3; } /* Fuchsia-600 */
+.border-pink         { border-color: #db2777; } /* Pink-600 */
+.border-yellow       { border-color: #d97706; } /* Amber-600 */
+
+/* --- 🔹 গ) বর্ডার স্টাইলস (Border Styles) --- */
+.border-solid        { border-style: solid; }
+.border-dashed       { border-style: dashed; }
+.border-dotted       { border-style: dotted; }
+.border-double       { border-style: double; }
+
+/* --- 🔹 ঘ) রেডিমেড শর্টকাট কম্বিনেশন (Quick Utilities) --- */
+.border-dashed-blue  { border: 3px dashed #1d4ed8; }
+.border-dashed-red   { border: 3px dashed #e11d48; }
+.border-dashed-green { border: 3px dashed #10b981; }
+.border-double-black { border: 5px double #000000; }
+
+/* --- 🔹 ঙ) বর্ডার রেডিয়াস (Border Radius) --- */
+.rounded-none { border-radius: 0px; }
+.rounded-sm   { border-radius: 2px; }
+.rounded      { border-radius: 4px; }
+.rounded-md   { border-radius: 6px; }
+.rounded-lg   { border-radius: 8px; }
+.rounded-xl   { border-radius: 12px; }
+.rounded-2xl  { border-radius: 16px; }
+.rounded-3xl  { border-radius: 24px; }
+.rounded-full { border-radius: 9999px; }
+
+
+/* ==========================================================================
+   📐 12. WIDTH & HEIGHT UTILITIES (Image & Container Dimension Scale)
+   ========================================================================== */
+
+/* --- 🔹 ক) উইডথ স্কেলিং ক্লাস (Width Classes) --- */
+.w-auto   { width: auto; }
+.w-full   { width: 100%; }
+
+/* ১০px থেকে ১০০px (ছোট আইকন বা লোগোর জন্য ১০ পিক্সেল গ্যাপে) */
+.w-10    { width: 10px; }
+.w-20    { width: 20px; }
+.w-30    { width: 30px; }
+.w-40    { width: 40px; }
+.w-50    { width: 50px; }
+.w-60    { width: 60px; }
+.w-70    { width: 70px; }
+.w-80    { width: 80px; }
+.w-90    { width: 90px; }
+.w-100   { width: 100px; }
+
+/* ১২০px থেকে ৪০০px (ইমেজ এবং কার্ডের জন্য ২০ পিক্সেল গ্যাপে) */
+.w-120   { width: 120px; }
+.w-140   { width: 140px; }
+.w-160   { width: 160px; }
+.w-180   { width: 180px; }
+.w-200   { width: 200px; }
+.w-220   { width: 220px; }
+.w-240   { width: 240px; }
+.w-260   { width: 260px; }
+.w-280   { width: 280px; }
+.w-300   { width: 300px; }
+.w-320   { width: 320px; }
+.w-340   { width: 340px; }
+.w-360   { width: 360px; }
+.w-380   { width: 380px; } /* আপনার ১ম ও ২য় ইমেজের নিখুঁত উইডথ (৩৮০px লক) */
+.w-400   { width: 400px; }
+
+/* ৪৫০px থেকে ৮০০px+ (মেগা বক্স বা চকবোর্ড সেকশনের জন্য ৫০ পিক্সেল গ্যাপে) */
+.w-450   { width: 450px; }
+.w-500   { width: 500px; }
+.w-550   { width: 550px; }
+.w-600   { width: 600px; }
+.w-650   { width: 650px; }
+.w-700   { width: 700px; }
+.w-750   { width: 750px; }
+.w-800   { width: 800px; }
+.w-900   { width: 900px; }
+.w-1000  { width: 1000px; }
+.w-1100  { width: 1100px; }
+.w-1200  { width: 1200px; }
+.w-1250  { width: 1250px; }
+.w-1300  { width: 1300px; }
+.w-1350  { width: 1350px; }
+.w-1400  { width: 1400px; }
+.w-1450  { width: 1450px; }
+.w-1500  { width: 1500px; }
+.w-1550  { width: 1550px; }
+.w-1600  { width: 1600px; }
+.w-1650  { width: 1650px; }
+.w-1700  { width: 1700px; }
+.w-1750  { width: 1750px; }
+.w-1800  { width: 1800px; }
+.w-1850  { width: 1850px; }
+.w-1900  { width: 1900px; }
+.w-1350  { width: 1350px; }
+.w-1400  { width: 1400px; }
+.w-1450  { width: 1450px; }
+.w-1500  { width: 1500px; }
+.w-1550  { width: 1550px; }
+.w-1600  { width: 1600px; }
+.w-1650  { width: 1650px; }
+.w-1700  { width: 1700px; }
+.w-1750  { width: 1750px; }
+.w-1800  { width: 1800px; }
+.w-1850  { width: 1850px; }
+.w-1900  { width: 1900px; }
+.w-1920  { width: 1920px; }
+
+
+/* --- 🔹 খ) হাইট স্কেলিং ক্লাস (Height Classes) --- */
+.h-auto   { height: auto; }
+.h-full   { height: 100%; }
+
+/* ১০px থেকে ১০০px */
+.h-10    { height: 10px; }
+.h-20    { height: 20px; }
+.h-30    { height: 30px; }
+.h-40    { height: 40px; }
+.h-50    { height: 50px; }
+.h-60    { height: 60px; }
+.h-70    { height: 70px; }
+.h-80    { height: 80px; }
+.h-90    { height: 90px; }
+.h-100   { height: 100px; }
+
+/* ১২০px থেকে ৪০০px */
+.h-120   { height: 120px; }
+.h-140   { height: 140px; }
+.h-160   { height: 160px; }
+.h-180   { height: 180px; }
+.h-200   { height: 200px; }
+.h-220   { height: 220px; }
+.h-240   { height: 240px; }
+.h-260   { height: 260px; }
+.w-280   { width: 280px; }
+.h-300   { height: 300px; }
+.h-320   { height: 320px; }
+.h-340   { height: 340px; }
+.h-360   { height: 360px; }
+.h-380   { height: 380px; } /* আপনার ইমেজের নিখুঁত হাইট (৩৮০px লক) */
+.h-400   { height: 400px; }
+
+/* ৪৫০px থেকে ৮০০px+ */
+.h-450   { height: 450px; }
+.h-500   { height: 500px; }
+.h-550   { height: 550px; }
+.h-600   { height: 600px; }
+.h-650   { height: 650px; }
+.h-700   { height: 700px; }
+.h-750   { height: 750px; }
+.h-800   { height: 800px; }
+
+/* --------- Most important css ------------- */
+
+/* --- 🖼️ 🔹 OBJECT FIT UTILITIES (ইমেজ ফিটিং ম্যাজিক) --- */
+.object-contain {
+  object-fit: contain; /* ইমেজের রেশিও ঠিক রেখে ফ্রেমের ভেতর পুরোটা দেখাবে */
+}
+
+.object-cover {
+  object-fit: cover; /* ফ্রেম জুটিয়ে ইমেজ বসিয়া দেবে, কোনো কোণা ফাঁকা থাকবে না */
+}
+
+.object-fill {
+  object-fit: fill; /* ইমেজকে জোর করে টেনে-হিঁচড়ে ফ্রেমের সাইজে ফিট করাবে */
+}
+
+/* ==========================================================================
+   🔤 13. INTERESTING HANDWRITING & TEACHING FONTS  GOOGLE FONTS IMPORT (হ্যান্ডরাইটিং ও টিচিং অ্যানিমেশন স্পেশাল)
+   ========================================================================== */
+
+/* ১. Kalam: একদম খাঁটি রিয়েলিস্টিক মার্কার পেন বা বলপেন রাইটিং ফিল (হোয়াইটবোর্ডের রাজা) */
+.font-kalam { font-family: 'Kalam', cursive, sans-serif; }
+
+/* ২. Caveat: একটু স্টাইলিশ রানিং হ্যান্ডরাইটিং বা সিগনেচার স্টাইল */
+.font-caveat { font-family: 'Caveat', cursive, sans-serif; }
+
+/* ৩. Patrick Hand: বাচ্চাদের ক্লাসরুম বা কমিক বুক টিচিং স্টাইলের নিখুঁত ফন্ট */
+.font-patrick { font-family: 'Patrick Hand', cursive, sans-serif; }
+
+/* ৪. Architects Daughter: একদম আর্কিটেক্টদের ড্রয়িং শিটের মতো ক্রিস্প অ্যান্ড শার্প হ্যান্ডরাইটিং */
+.font-architect { font-family: 'Architects Daughter', cursive, sans-serif; }
+
+/* ৫. Delius: একদম গোল গোল, পরিষ্কার ও মার্জিত স্কুলবুক ক্যালিগ্রাফি */
+.font-delius { font-family: 'Delius', cursive, sans-serif; }
+
+/* ৬. Fredoka: বোল্ড হেডিং-এর জন্য কিউট ও গোলগাল রাউন্ডেড ফন্ট (চকবোর্ড লুকের জন্য বেস্ট) */
+.font-fredoka { font-family: 'Fredoka', sans-serif; }
+
+/* ৭. Comfortaa: মডার্ন টেকনিক্যাল স্লাইড ও ক্রিস্প রিডেবিলিটির জন্য চমৎকার জ্যামিতিক ফন্ট */
+.font-comfortaa { font-family: 'Comfortaa', sans-serif; }
+
+/* ৮. Shadow Into Light: একদম চিকন কলমে ঝটপট লেখা ক্যাজুয়াল ডায়েরি হ্যান্ডরাইটিং ফিল */
+.font-shadow { font-family: 'Shadows Into Light', cursive, sans-serif; }
+
+/* ৯. Amatic SC: অল-ক্যাপস (সব বড় হাতের) আর্ট স্টাইল ফন্ট, কমিক বা ইনফোগ্রাফিক হেডিংয়ের জন্য জোস */
+.font-amatic { font-family: 'Amatic SC', cursive, sans-serif; }
+
+/* ১০. Permanent Marker: থিক স্কেচ পেন বা মোটা মার্কার দিয়ে বোর্ডে হাইলাইট করার ম্যাসসিভ ফন্ট */
+.font-marker { font-family: 'Permanent Marker', cursive, sans-serif; }
+
+/* ১১. Indie Flower: একটু গোলগাল, বাবলি এবং অত্যন্ত কিউট ও ফ্রেন্ডলি হাতের লেখা */
+.font-indie { font-family: 'Indie Flower', cursive, sans-serif; }
+
+/* ১২. Just Another Hand: একদম খাড়া খাড়া, চিকন ও লম্বাটে ক্যারেক্টার—রিয়েল চকবোর্ড রাফ নোটের ফিল দেয় */
+.font-another-hand { font-family: 'Just Another Hand', cursive, sans-serif; }
+
+/* ১৩. Rock Salt: একদম কাঁচা হাতের স্ক্র্যাচ বা চকের ড্রয়িং লুক (হেডিং বা কোনো কিছু কেটে দেওয়ার স্টাইলে দারুণ) */
+.font-rock-salt { font-family: 'Rock Salt', cursive, sans-serif; }
+
+/* ১৪. Quicksand: স্লাইডের টেকনিক্যাল কোড এক্সপ্লেনেশন বা সাব-টেক্সটের জন্য সুপার-ক্লিন রাউন্ডেড জ্যামিতিক ফন্ট */
+.font-quicksand { font-family: 'Quicksand', sans-serif; }
+
+/* ১৫. Pangolin: খুব সুন্দর, সমান এবং অত্যন্ত রিডেবল টিচিং নোটবুক ফন্ট */
+.font-pangolin { font-family: 'Pangolin', cursive, sans-serif; }
+
+
+/*ভিডিওর মেইন হেডিং: .font-marker (মোটা মার্কার ফিল) অথবা .font-amatic (আর্ট লুকে বড় করে দেখানোর জন্য)।
+
+প্যারাগ্রাফ বা রেগুলার টিচিং: .font-pangolin বা .font-indie (এগুলো চোখের জন্য খুব সুদিং এবং রেন্ডার হওয়ার পর একদম খাতার লেখার মতো খোলে)।
+
+চকবোর্ড বা সাইড নোট: .font-another-hand বা .font-shadow (একদম রিয়েল টাইম ক্লাসরুমের রাফ ড্রাফটের ভাইব দেবে)।
+*/
+
+
+/* ==========================================================================
+   層 14. Z-INDEX LAYERING UTILITIES (লেআউটের ওভারল্যাপ কন্ট্রোল)
+   ========================================================================== */
+.z-auto  { z-index: auto; }
+.z-0     { z-index: 0; }
+.z-1     { z-index: 1; }
+.z-2     { z-index: 2; }
+.z-5     { z-index: 5; }
+.z-10    { z-index: 10; }  /* সাধারণত টেক্সট বা ব্যাকগ্রাউন্ড বক্সের জন্য */
+.z-20    { z-index: 20; }
+.z-30    { z-index: 30; }
+.z-40    { z-index: 40; }
+.z-50    { z-index: 50; }  /* পপআপ বা ওভারলে ফ্রেমের জন্য */
+.z-100   { z-index: 100; } /* আপনার অ্যানিমেশন পেনের হাতের জন্য (হাত সবসময় ওপরে থাকবে) */
+.z-999   { z-index: 999; }
+
+
+/* ==========================================================================
+   📏 15. LINE HEIGHT UTILITIES (Leading Classes for Text Spacing)
+   ========================================================================== */
+
+/* ১. leading-none: একদম টাইট বা জিরো গ্যাপ (মূলত আল্ট্রা-বোল্ড মেগা হেডিংয়ের জন্য) */
+.leading-none     { line-height: 1; }
+
+/* ২. leading-tight: কম গ্যাপ (বড় সাইজের টাইটেল বা ২ লাইনের হেডিংয়ের জন্য বেস্ট) */
+.leading-tight    { line-height: 1.25; }
+
+/* ৩. leading-snug: হালকা চিপা গ্যাপ (সাব-হেডিং বা বড় প্যারাগ্রাফ কন্টেন্টের জন্য) */
+.leading-snug     { line-height: 1.375; }
+
+/* ৪. leading-normal: স্ট্যান্ডার্ড ডিফল্ট গ্যাপ (সাধারণ টেক্সটের জন্য) */
+.leading-normal   { line-height: 1.5; }
+
+/* ৫. leading-relaxed: চমৎকার ছড়ানো গ্যাপ (হ্যান্ডরাইটিং বা মার্কার পেন প্যারাগ্রাফের জন্য ১ নম্বর চয়েস) */
+.leading-relaxed  { line-height: 1.625; }
+
+/* ৬. leading-loose: মেগা গ্যাপ (যদি লাইনের মাঝে খাতার রুলিং লাইনের মতো বড় ফাঁকা জায়গা চান) */
+.leading-loose    { line-height: 2; }
+
+
+/* --- 🎯 হোয়াইটবোর্ড স্পেশাল কাস্টম পিক্সেল বেসড লাইন-হাইট (নিখুঁত গ্রিড ম্যাচিংয়ের জন্য) --- */
+.leading-40       { line-height: 40px; }
+.leading-50       { line-height: 50px; }
+.leading-60       { line-height: 60px; }
+.leading-70       { line-height: 70px; }
+.leading-80       { line-height: 80px; }
+.leading-90       { line-height: 90px; }
+.leading-100      { line-height: 100px; }
+
+###########################################
+src\Root.jsx
+###########################################
+import React from 'react';
+import { Composition } from 'remotion';
+import { MainVideoEngine, scene01Sequence, scene02Sequence, scene03Sequence,
+   scene04Sequence, mcpBasicFlowSequence } from './MainVideoEngine';
+import { getSequenceDurationInFrames } from './whiteboard.config';
+
+const FPS = 30;
+const END_HOLD_IN_FRAMES = FPS * 3;
+
+export const RemotionRoot = () => {
+  // প্রতিটি সিনের আসল ডিউরেশন ক্যালকুলেট করা
+  const scene01Duration = getSequenceDurationInFrames(scene01Sequence, FPS);
+  const scene02Duration = getSequenceDurationInFrames(scene02Sequence, FPS);
+  const scene03Duration = getSequenceDurationInFrames(scene03Sequence, FPS);
+  const scene04Duration = getSequenceDurationInFrames(scene04Sequence, FPS);
+  const scene05Duration = getSequenceDurationInFrames(mcpBasicFlowSequence, FPS);
+
+
+  // মোট ডিউরেশন = Scene01 + Scene02 + Scene03 + End Hold
+  const totalDuration = 
+    scene01Duration + 
+    scene02Duration + 
+    scene03Duration + 
+    scene04Duration +
+    scene05Duration +
+    END_HOLD_IN_FRAMES;
+
+  return (
+    <Composition
+      id="WhiteboardEngine"
+      component={MainVideoEngine}
+      durationInFrames={totalDuration}
+      fps={FPS}
+      width={1920}
+      height={1080}
+    />
+  );
+};
+
+
+###########################################
+src\utils\styleResolver.js
+###########################################
+/* ==========================================================================
+   🎯 WHITEBOARD ENGINE - TAILWIND-STYLE CLASS TO INLINE STYLE RESOLVER
+   ========================================================================== */
+
+/* Auto-generated from master.css */
+
+export const MASTER_STYLE_MAP = {
+  'text-black': { color: '#000000' },
+  'text-white': { color: '#ffffff' },
+  'text-gray': { color: '#4b5563' },
+  'text-light-gray': { color: '#9ca3af' },
+  'text-red': { color: '#e11d48' },
+  'text-blue': { color: '#1d4ed8' },
+  'text-cyan': { color: '#0284c7' },
+  'text-green': { color: '#10b981' },
+  'text-emerald': { color: '#047857' },
+  'text-purple': { color: '#7e22ce' },
+  'text-fuchsia': { color: '#c026d3' },
+  'text-pink': { color: '#db2777' },
+  'text-orange': { color: '#ea580c' },
+  'text-yellow': { color: '#d97706' },
+  'bg-black': { backgroundColor: '#000000' },
+  'bg-white': { backgroundColor: '#ffffff' },
+  'bg-gray-50': { backgroundColor: '#f9fafb' },
+  'bg-gray-100': { backgroundColor: '#f3f4f6' },
+  'bg-red': { backgroundColor: '#ffe4e6' },
+  'bg-blue': { backgroundColor: '#dbeafe' },
+  'bg-cyan': { backgroundColor: '#e0f2fe' },
+  'bg-green': { backgroundColor: '#d1fae5' },
+  'bg-purple': { backgroundColor: '#f3e8ff' },
+  'bg-orange': { backgroundColor: '#ffedd5' },
+  'bg-yellow': { backgroundColor: '#fef9c3' },
+  'text-xs': { fontSize: '16px' },
+  'text-sm': { fontSize: '20px' },
+  'text-base': { fontSize: '24px' },
+  'text-lg': { fontSize: '28px' },
+  'text-xl': { fontSize: '32px' },
+  'text-2xl': { fontSize: '38px' },
+  'text-3xl': { fontSize: '45px' },
+  'text-4xl': { fontSize: '52px' },
+  'text-5xl': { fontSize: '64px' },
+  'text-6xl': { fontSize: '75px' },
+  'text-7xl': { fontSize: '85px' },
+  'text-8xl': { fontSize: '95px' },
+  'text-9xl': { fontSize: '110px' },
+  'top-0': { top: '0px' },
+  'top-5': { top: '5px' },
+  'top-10': { top: '10px' },
+  'top-15': { top: '15px' },
+  'top-20': { top: '20px' },
+  'top-25': { top: '25px' },
+  'top-30': { top: '30px' },
+  'top-35': { top: '35px' },
+  'top-40': { top: '40px' },
+  'top-45': { top: '45px' },
+  'top-50': { top: '50px' },
+  'top-60': { top: '60px' },
+  'top-70': { top: '70px' },
+  'top-80': { top: '80px' },
+  'top-90': { top: '90px' },
+  'top-100': { top: '100px' },
+  'top-110': { top: '110px' },
+  'top-120': { top: '120px' },
+  'top-130': { top: '130px' },
+  'top-140': { top: '140px' },
+  'top-150': { top: '150px' },
+  'top-160': { top: '160px' },
+  'top-170': { top: '170px' },
+  'top-180': { top: '180px' },
+  'top-190': { top: '190px' },
+  'top-200': { top: '200px' },
+  'top-210': { top: '210px' },
+  'top-220': { top: '220px' },
+  'top-230': { top: '230px' },
+  'top-240': { top: '240px' },
+  'top-250': { top: '250px' },
+  'top-260': { top: '260px' },
+  'top-270': { top: '270px' },
+  'top-280': { top: '280px' },
+  'top-290': { top: '290px' },
+  'top-300': { top: '300px' },
+  'top-350': { top: '350px' },
+  'top-400': { top: '400px' },
+  'top-450': { top: '450px' },
+  'top-500': { top: '500px' },
+  'top-550': { top: '550px' },
+  'top-600': { top: '600px' },
+  'top-650': { top: '650px' },
+  'top-700': { top: '700px' },
+  'top-750': { top: '750px' },
+  'top-800': { top: '800px' },
+  'top-850': { top: '850px' },
+  'top-900': { top: '900px' },
+  'top-950': { top: '950px' },
+  'top-1000': { top: '1000px' },
+  'top-1100': { top: '1100px' },
+  'top-1200': { top: '1200px' },
+  'left-0': { left: '0px' },
+  'left-5': { left: '5px' },
+  'left-10': { left: '10px' },
+  'left-15': { left: '15px' },
+  'left-20': { left: '20px' },
+  'left-25': { left: '25px' },
+  'left-30': { left: '30px' },
+  'left-35': { left: '35px' },
+  'left-40': { left: '40px' },
+  'left-45': { left: '45px' },
+  'left-50': { left: '50px' },
+  'left-60': { left: '60px' },
+  'left-70': { left: '70px' },
+  'left-80': { left: '80px' },
+  'left-90': { left: '90px' },
+  'left-100': { left: '100px' },
+  'left-110': { left: '110px' },
+  'left-120': { left: '120px' },
+  'left-130': { left: '130px' },
+  'left-140': { left: '140px' },
+  'left-150': { left: '150px' },
+  'left-160': { left: '160px' },
+  'left-170': { left: '170px' },
+  'left-180': { left: '180px' },
+  'left-190': { left: '190px' },
+  'left-200': { left: '200px' },
+  'left-220': { left: '220px' },
+  'left-240': { left: '240px' },
+  'left-250': { left: '250px' },
+  'left-260': { left: '260px' },
+  'left-280': { left: '280px' },
+  'left-300': { left: '300px' },
+  'left-350': { left: '350px' },
+  'left-400': { left: '400px' },
+  'left-450': { left: '450px' },
+  'left-500': { left: '500px' },
+  'left-550': { left: '550px' },
+  'left-600': { left: '600px' },
+  'left-650': { left: '650px' },
+  'left-700': { left: '700px' },
+  'left-750': { left: '750px' },
+  'left-800': { left: '800px' },
+  'left-850': { left: '850px' },
+  'left-900': { left: '900px' },
+  'left-950': { left: '950px' },
+  'left-1000': { left: '1000px' },
+  'left-1100': { left: '1100px' },
+  'left-1200': { left: '1200px' },
+  'left-1300': { left: '1300px' },
+  'left-1400': { left: '1400px' },
+  'left-1500': { left: '1500px' },
+  'highlight-yellow': { backgroundColor: '#fef08a', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-purple': { backgroundColor: '#e9d5ff', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-green': { backgroundColor: '#a7f3d0', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-blue': { backgroundColor: '#bfdbfe', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-orange': { backgroundColor: '#ffedd5', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-pink': { backgroundColor: '#fbcfe8', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-cyan': { backgroundColor: '#bae6fd', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-deep-red': { backgroundColor: '#be123c', color: '#ffffff', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-deep-blue': { backgroundColor: '#1d4ed8', color: '#ffffff', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-deep-green': { backgroundColor: '#047857', color: '#ffffff', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-deep-purple': { backgroundColor: '#6b21a8', color: '#ffffff', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-deep-orange': { backgroundColor: '#c2410c', color: '#ffffff', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-deep-pink': { backgroundColor: '#be185d', color: '#ffffff', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-deep-cyan': { backgroundColor: '#0369a1', color: '#ffffff', borderRadius: '4px', padding: '0px 6px' },
+  'highlight-deep-yellow': { backgroundColor: '#b45309', color: '#ffffff', borderRadius: '4px', padding: '0px 6px' },
+  'underline-red': { borderBottom: '4px solid #e11d48' },
+  'underline-blue': { borderBottom: '4px solid #1d4ed8' },
+  'underline-green': { borderBottom: '4px solid #10b981' },
+  'underline-black': { borderBottom: '4px solid #000000' },
+  'underline-purple': { borderBottom: '4px solid #7e22ce' },
+  'underline-orange': { borderBottom: '4px solid #ea580c' },
+  'underline-cyan': { borderBottom: '4px solid #0284c7' },
+  'underline-fuchsia': { borderBottom: '4px solid #c026d3' },
+  'underline-pink': { borderBottom: '4px solid #db2777' },
+  'underline-yellow': { borderBottom: '4px solid #d97706' },
+  'underline-lime': { borderBottom: '4px solid #65a30d' },
+  'underline-double-red': { borderBottom: '5px double #e11d48' },
+  'underline-double-blue': { borderBottom: '5px double #1d4ed8' },
+  'underline-double-green': { borderBottom: '5px double #10b981' },
+  'underline-double-black': { borderBottom: '5px double #000000' },
+  'underline-double-purple': { borderBottom: '5px double #7e22ce' },
+  'underline-double-cyan': { borderBottom: '5px double #0284c7' },
+  'underline-double-fuchsia': { borderBottom: '5px double #c026d3' },
+  'underline-double-orange': { borderBottom: '5px double #ea580c' },
+  'underline-dashed-red': { borderBottom: '3px dashed #e11d48' },
+  'underline-dashed-blue': { borderBottom: '3px dashed #1d4ed8' },
+  'underline-dashed-green': { borderBottom: '3px dashed #10b981' },
+  'underline-dashed-black': { borderBottom: '3px dashed #000000' },
+  'underline-dashed-purple': { borderBottom: '3px dashed #7e22ce' },
+  'underline-dashed-cyan': { borderBottom: '3px dashed #0284c7' },
+  'underline-dotted-red': { borderBottom: '4px dotted #e11d48' },
+  'underline-dotted-blue': { borderBottom: '4px dotted #1d4ed8' },
+  'underline-dotted-green': { borderBottom: '4px dotted #10b981' },
+  'underline-dotted-black': { borderBottom: '4px dotted #000000' },
+  'underline-dotted-purple': { borderBottom: '4px dotted #7e22ce' },
+  'underline-dotted-fuchsia': { borderBottom: '4px dotted #c026d3' },
+  'underline-thick-red': { borderBottom: '6px solid #e11d48' },
+  'underline-thick-blue': { borderBottom: '6px solid #1d4ed8' },
+  'underline-thick-green': { borderBottom: '6px solid #10b981' },
+  'underline-thick-purple': { borderBottom: '6px solid #7e22ce' },
+  'underline-thick-yellow': { borderBottom: '6px solid #d97706' },
+  'bold': { fontWeight: '700' },
+  'font-bold': { fontWeight: '700' },
+  'italic': { fontStyle: 'italic' },
+  'font-normal': { fontWeight: '400' },
+  'absolute': { position: 'absolute' },
+  'relative': { position: 'relative' },
+  'static': { position: 'static' },
+  'fixed': { position: 'fixed' },
+  'p-0': { padding: '0px' },
+  'p-1': { padding: '4px' },
+  'p-2': { padding: '8px' },
+  'p-3': { padding: '12px' },
+  'p-4': { padding: '16px' },
+  'p-5': { padding: '20px' },
+  'px-1': { paddingLeft: '4px', paddingRight: '4px' },
+  'px-2': { paddingLeft: '8px', paddingRight: '8px' },
+  'px-3': { paddingLeft: '12px', paddingRight: '12px' },
+  'px-4': { paddingLeft: '16px', paddingRight: '16px' },
+  'py-1': { paddingTop: '4px', paddingBottom: '4px' },
+  'py-2': { paddingTop: '8px', paddingBottom: '8px' },
+  'py-3': { paddingTop: '12px', paddingBottom: '12px' },
+  'py-4': { paddingTop: '16px', paddingBottom: '16px' },
+  'm-0': { margin: '0px' },
+  'm-1': { margin: '4px' },
+  'm-2': { margin: '8px' },
+  'm-3': { margin: '12px' },
+  'm-4': { margin: '16px' },
+  'mx-auto': { marginLeft: 'auto', marginRight: 'auto' },
+  'border-0': { borderWidth: '0px' },
+  'border': { border: '2px solid #e5e7eb' },
+  'border-1': { borderWidth: '1px' },
+  'border-2': { borderWidth: '2px' },
+  'border-3': { borderWidth: '3px' },
+  'border-4': { borderWidth: '4px' },
+  'border-6': { borderWidth: '6px' },
+  'border-8': { borderWidth: '8px' },
+  'border-black': { borderColor: '#000000' },
+  'border-white': { borderColor: '#ffffff' },
+  'border-gray': { borderColor: '#9ca3af' },
+  'border-red': { borderColor: '#e11d48' },
+  'border-blue': { borderColor: '#1d4ed8' },
+  'border-green': { borderColor: '#10b981' },
+  'border-purple': { borderColor: '#7e22ce' },
+  'border-orange': { borderColor: '#ea580c' },
+  'border-cyan': { borderColor: '#0284c7' },
+  'border-fuchsia': { borderColor: '#c026d3' },
+  'border-pink': { borderColor: '#db2777' },
+  'border-yellow': { borderColor: '#d97706' },
+  'border-solid': { borderStyle: 'solid' },
+  'border-dashed': { borderStyle: 'dashed' },
+  'border-dotted': { borderStyle: 'dotted' },
+  'border-double': { borderStyle: 'double' },
+  'border-dashed-blue': { border: '3px dashed #1d4ed8' },
+  'border-dashed-red': { border: '3px dashed #e11d48' },
+  'border-dashed-green': { border: '3px dashed #10b981' },
+  'border-double-black': { border: '5px double #000000' },
+  'rounded-none': { borderRadius: '0px' },
+  'rounded-sm': { borderRadius: '2px' },
+  'rounded': { borderRadius: '4px' },
+  'rounded-md': { borderRadius: '6px' },
+  'rounded-lg': { borderRadius: '8px' },
+  'rounded-xl': { borderRadius: '12px' },
+  'rounded-2xl': { borderRadius: '16px' },
+  'rounded-3xl': { borderRadius: '24px' },
+  'rounded-full': { borderRadius: '9999px' },
+  'w-auto': { width: 'auto' },
+  'w-full': { width: '100%' },
+  'w-10': { width: '10px' },
+  'w-20': { width: '20px' },
+  'w-30': { width: '30px' },
+  'w-40': { width: '40px' },
+  'w-50': { width: '50px' },
+  'w-60': { width: '60px' },
+  'w-70': { width: '70px' },
+  'w-80': { width: '80px' },
+  'w-90': { width: '90px' },
+  'w-100': { width: '100px' },
+  'w-120': { width: '120px' },
+  'w-140': { width: '140px' },
+  'w-160': { width: '160px' },
+  'w-180': { width: '180px' },
+  'w-200': { width: '200px' },
+  'w-220': { width: '220px' },
+  'w-240': { width: '240px' },
+  'w-260': { width: '260px' },
+  'w-280': { width: '280px' },
+  'w-300': { width: '300px' },
+  'w-320': { width: '320px' },
+  'w-340': { width: '340px' },
+  'w-360': { width: '360px' },
+  'w-380': { width: '380px' },
+  'w-400': { width: '400px' },
+  'w-450': { width: '450px' },
+  'w-500': { width: '500px' },
+  'w-550': { width: '550px' },
+  'w-600': { width: '600px' },
+  'w-650': { width: '650px' },
+  'w-700': { width: '700px' },
+  'w-750': { width: '750px' },
+  'w-800': { width: '800px' },
+  'w-900': { width: '900px' },
+  'w-1000': { width: '1000px' },
+  'w-1100': { width: '1100px' },
+  'w-1200': { width: '1200px' },
+  'w-1350': { width: '1350px' },
+  'w-1400': { width: '1400px' },
+  'w-1450': { width: '1450px' },
+  'w-1500': { width: '1500px' },
+  'w-1550': { width: '1550px' },
+  'w-1600': { width: '1600px' },
+  'w-1650': { width: '1650px' },
+  'w-1700': { width: '1700px' },
+  'w-1750': { width: '1750px' },
+  'w-1800': { width: '1800px' },
+  'w-1850': { width: '1850px' },
+  'w-1900': { width: '1900px' },
+  'w-1920': { width: '1920px' },
+  'h-auto': { height: 'auto' },
+  'h-full': { height: '100%' },
+  'h-10': { height: '10px' },
+  'h-20': { height: '20px' },
+  'h-30': { height: '30px' },
+  'h-40': { height: '40px' },
+  'h-50': { height: '50px' },
+  'h-60': { height: '60px' },
+  'h-70': { height: '70px' },
+  'h-80': { height: '80px' },
+  'h-90': { height: '90px' },
+  'h-100': { height: '100px' },
+  'h-120': { height: '120px' },
+  'h-140': { height: '140px' },
+  'h-160': { height: '160px' },
+  'h-180': { height: '180px' },
+  'h-200': { height: '200px' },
+  'h-220': { height: '220px' },
+  'h-240': { height: '240px' },
+  'h-260': { height: '260px' },
+  'h-300': { height: '300px' },
+  'h-320': { height: '320px' },
+  'h-340': { height: '340px' },
+  'h-360': { height: '360px' },
+  'h-380': { height: '380px' },
+  'h-400': { height: '400px' },
+  'h-450': { height: '450px' },
+  'h-500': { height: '500px' },
+  'h-550': { height: '550px' },
+  'h-600': { height: '600px' },
+  'h-650': { height: '650px' },
+  'h-700': { height: '700px' },
+  'h-750': { height: '750px' },
+  'h-800': { height: '800px' },
+  'object-contain': { objectFit: 'contain' },
+  'object-cover': { objectFit: 'cover' },
+  'object-fill': { objectFit: 'fill' },
+  'font-kalam': { fontFamily: "'Kalam', cursive, sans-serif" },
+  'font-caveat': { fontFamily: "'Caveat', cursive, sans-serif" },
+  'font-patrick': { fontFamily: "'Patrick Hand', cursive, sans-serif" },
+  'font-architect': { fontFamily: "'Architects Daughter', cursive, sans-serif" },
+  'font-delius': { fontFamily: "'Delius', cursive, sans-serif" },
+  'font-fredoka': { fontFamily: "'Fredoka', sans-serif" },
+  'font-comfortaa': { fontFamily: "'Comfortaa', sans-serif" },
+  'font-shadow': { fontFamily: "'Shadows Into Light', cursive, sans-serif" },
+  'font-amatic': { fontFamily: "'Amatic SC', cursive, sans-serif" },
+  'font-marker': { fontFamily: "'Permanent Marker', cursive, sans-serif" },
+  'font-indie': { fontFamily: "'Indie Flower', cursive, sans-serif" },
+  'font-another-hand': { fontFamily: "'Just Another Hand', cursive, sans-serif" },
+  'font-rock-salt': { fontFamily: "'Rock Salt', cursive, sans-serif" },
+  'font-quicksand': { fontFamily: "'Quicksand', sans-serif" },
+  'font-pangolin': { fontFamily: "'Pangolin', cursive, sans-serif" },
+  'z-auto': { zIndex: 'auto' },
+  'z-0': { zIndex: '0' },
+  'z-1': { zIndex: '1' },
+  'z-2': { zIndex: '2' },
+  'z-5': { zIndex: '5' },
+  'z-10': { zIndex: '10' },
+  'z-20': { zIndex: '20' },
+  'z-30': { zIndex: '30' },
+  'z-40': { zIndex: '40' },
+  'z-50': { zIndex: '50' },
+  'z-100': { zIndex: '100' },
+  'z-999': { zIndex: '999' },
+  'leading-none': { lineHeight: '1' },
+  'leading-tight': { lineHeight: '1.25' },
+  'leading-snug': { lineHeight: '1.375' },
+  'leading-normal': { lineHeight: '1.5' },
+  'leading-relaxed': { lineHeight: '1.625' },
+  'leading-loose': { lineHeight: '2' },
+  'leading-40': { lineHeight: '40px' },
+  'leading-50': { lineHeight: '50px' },
+  'leading-60': { lineHeight: '60px' },
+  'leading-70': { lineHeight: '70px' },
+  'leading-80': { lineHeight: '80px' },
+  'leading-90': { lineHeight: '90px' },
+  'leading-100': { lineHeight: '100px' }
+};
+
+/**
+ * 🎯 parseClassNameToStyle
+ * এই মেথডটি যেকোনো স্পেস-সেপারেটেড ক্লাস স্ট্রিং (যেমন: "font-kalam top-80 left-100 text-red") রিড করবে, 
+ * এবং লুপ চালিয়ে পিক্সেল গ্রিড লক লজিক ও স্ট্যাটিক সিএসএস ম্যাপ মার্জ করে একটি পিউর স্টাইল অবজেক্ট রিটার্ন করবে।
+ */
+export const parseClassNameToStyle = (className = '') => {
+  if (!className) return {};
+
+  const classes = className.split(/\s+/).filter(Boolean);
+  const resolvedStyle = {};
+
+  classes.forEach((cls) => {
+    // ১. স্ট্যাটিক ম্যাপ থেকে হুবহু ম্যাচ হওয়া রুলস মার্জ করা হচ্ছে
+    if (MASTER_STYLE_MAP[cls]) {
+      Object.assign(resolvedStyle, MASTER_STYLE_MAP[cls]);
+      return;
+    }
+
+    // ২. ডাইনামিক গ্রিড লক লজিক (Top, Left, Width, Height, Line-Height পিক্সেল ম্যাপিং)
+    
+    // --- TOP POSITIONS ---
+    if (cls.startsWith('top-')) {
+      const val = parseInt(cls.substring(4), 10);
+      if (!isNaN(val)) resolvedStyle.top = `${val}px`;
+      return;
+    }
+
+    // --- LEFT POSITIONS ---
+    if (cls.startsWith('left-')) {
+      const val = parseInt(cls.substring(5), 10);
+      if (!isNaN(val)) resolvedStyle.left = `${val}px`;
+      return;
+    }
+
+    // --- WIDTH UTILITIES ---
+    if (cls.startsWith('w-')) {
+      const val = parseInt(cls.substring(2), 10);
+      if (!isNaN(val)) resolvedStyle.width = `${val}px`;
+      return;
+    }
+
+    // --- HEIGHT UTILITIES ---
+    if (cls.startsWith('h-')) {
+      const val = parseInt(cls.substring(2), 10);
+      if (!isNaN(val)) resolvedStyle.height = `${val}px`;
+      return;
+    }
+
+    // --- CUSTOM PIXEL LINE-HEIGHTS ---
+    if (cls.startsWith('leading-')) {
+      const val = parseInt(cls.substring(8), 10);
+      if (!isNaN(val)) resolvedStyle.lineHeight = `${val}px`;
+      return;
+    }
+  });
+
+  return resolvedStyle;
+};
+
+###########################################
+src\whiteboard.config.js
+###########################################
+import React from 'react';
+import { parseClassNameToStyle } from './utils/styleResolver';
+
+export const headingAnimationConfig = {
+ speedMultiplier: 1.0,   // 🚀 হেডিং লেখার স্পিড মাল্টিপ্লায়ার
+  waveAmplitude: 16,      // 🌊 হেডিং লেখার সময় হাতের উপর-নিচ ঢেউয়ের সাইজ (পিক্সেলে)
+  waveFrequency: 0.8,     // ⚡ হেডিং এর জন্য হাত নাচার ফ্রিকোয়েন্সি 
+  microNoise: 1.5,        // ✒️ পেনের ডগার সূক্ষ্ম রিয়েলিস্টিক ভাইব্রেশন
+};
+
+export const underlineAnimationConfig = {
+  speedMultiplier: 0.6,   // 🚀 আন্ডারলাইন ড্র বা রিভিল হওয়ার মেইন স্পিড চাবি
+  waveAmplitude: 8,       // 🌊 লাইন টানার সময় হাত কতটা উপর-নিচ কাঁপবে (হেডিংয়ের চেয়ে একটু কম হবে)
+  waveFrequency: 1.2,     // ⚡ লাইনের সময় হাত কত ঘনঘন কাঁপবে
+  microNoise: 1.2,        // ✒️ পেনের ডগার সূক্ষ্ম রিয়েলিস্টিক ভাইব্রেশন
+};
+
+export const paragraphAnimationConfig = {
+  speedMultiplier: 1.0,
+ framesPerCharacter: 1.5, // প্রতি character লিখতে গড়ে ১.৫ frame
+  waveAmplitude: 6,       // 🌊 ছোট ফন্টের জন্য হাতের ঢেউয়ের সাইজ ছোট (পিক্সেলে)
+  waveFrequency: 1.0,     // ⚡ ফাস্ট রাইটিংয়ের জন্য হালকা ফ্রিকোয়েন্সি 
+  microNoise: 1.0,        // ✒️ পেনের ডগার রিয়েলিস্টিক ভাইব্রেশন
+};
+
+export const imageAnimationConfig = {
+  speedMultiplier: 1.0,   // 🚀 হেডিং লেখার স্পিড মাল্টিপ্লায়ার
+  waveAmplitude: 16,      // 🌊 হেডিং লেখার সময় হাতের উপর-নিচ ঢেউয়ের সাইজ (পিক্সেলে)
+  waveFrequency: 0.8,     // ⚡ হেডিং এর জন্য হাত নাচার ফ্রিকোয়েন্সি 
+  microNoise: 1.5,        // ✒️ পেনের ডগার সূক্ষ্ম রিয়েলিস্টিক ভাইব্রেশন
+};
+
+export const eraserAnimationConfig = {
+  durationInFrames: 50,     // white erase overlay animation duration[cite: 1]
+  speedMultiplier: 1.0,     // শুধু erase animation speed control[cite: 1]
+  handSweepSpeed: 1.0,      // rubber hand left-right movement speed[cite: 1]
+  handAmplitudeRatio: 0.5,  // 0-1 এর মধ্যে: board width জুড়ে hand swing range[cite: 1]
+  scrubFrequency: 1.6,      // ⚡ কনফিগ থেকে: হাত কত দ্রুত এদিক-ওদিক ঘষবে
+  scrubAmplitude: 220,      // ↔️ কনফিগ থেকে: হাত কত বড় এরিয়া নিয়ে ঘষবে
+};
+
+
+// 📊 টেবিল অ্যানিমেশনের জন্য সম্পূর্ণ আলাদা ও ডেডিকেটেড কনফিগ
+export const tableAnimationConfig = {
+  speedMultiplier: 1.0,        // 🚀 টেবিল লেখার মেইন স্পিড চাবি
+  framesPerCharacter: 1.2,     // প্রতি ক্যারেক্টার লিখতে ফ্রেম বরাদ্দ (টেবিলে একটু ফাস্ট লেখার জন্য ১.২ দেওয়া হলো)
+  imageVirtualCharacters: 25,  // টেবিলে প্রতিটা ইমেজ বা আইকন ড্র করার জন্য ২৫ ক্যারেক্টারের সমপরিমাণ বাফার টাইম
+};
+
+
+
+// টেবিল বা অন্য যেকোনো ডিপ নেস্টেড এলিমেন্টের ক্যারেক্টার কাউন্ট করার নিখুঁত রিকার্সিভ ফাংশন
+const textLength = (node) => {
+  if (!node) return 0;
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node).length;
+  }
+  
+  if (node.props && node.props.children) {
+    return React.Children.toArray(node.props.children).reduce(
+      (sum, child) => sum + textLength(child),
+      0
+    );
+  }
+  
+  if (Array.isArray(node)) {
+    return node.reduce((sum, child) => sum + textLength(child), 0);
+  }
+
+  // আমাদের নতুন tableAnimationConfig থেকে ইমেজ বাফারিং টাইম রিড করবে
+  if (node.type === 'img' || node.type === 'Image') {
+    return tableAnimationConfig.imageVirtualCharacters; 
+  }
+
+  return 0;
+};
+
+export const getAnimationFrames = (element, fps) => {
+  if (!element) return { animationFrames: fps, progressEnd: 100 };
+
+  const props = element.props || {};
+  
+  // 🎯 মেইন ফিক্স: RevealElement বা অন্য কোনো র্যাপার থাকলে তার ভেতরের আসল কোর চাইল্ডকে এক্সট্র্যাক্ট করা
+  let targetElement = element;
+  if (props.children && React.isValidElement(props.children)) {
+    targetElement = props.children;
+  } else if (element.type?.name === 'RevealElement') {
+    targetElement = props.children;
+  }
+
+  const targetProps = targetElement?.props || {};
+  const parsedStyle = parseClassNameToStyle(targetProps.className || '');
+  const style = { ...parsedStyle, ...targetProps.style };
+  const animationType = targetElement?.type?.animationType;
+
+  let baseFrames;
+  let speedMultiplier = 1;
+
+  switch (animationType) {
+    case 'heading':
+      baseFrames = Math.max(Math.round(fps * 0.6), textLength(targetElement) * 4);
+      speedMultiplier = headingAnimationConfig.speedMultiplier;
+      break;
+
+    case 'underline': {
+      const width = Number.parseFloat(style?.width) || 300;
+      baseFrames = Math.max(Math.round(fps * 0.4), Math.ceil(width / 35));
+      speedMultiplier = underlineAnimationConfig.speedMultiplier;
+      break;
+    }
+
+    case 'paragraph':
+      baseFrames = Math.max(
+        fps,
+        Math.ceil(textLength(targetElement) * paragraphAnimationConfig.framesPerCharacter),
+      );
+      speedMultiplier = paragraphAnimationConfig.speedMultiplier;
+      break;
+
+    // 📊 টেবিল টাইপের জন্য এখন কাস্টম নোড ট্রাভার্সাল ১০০% কাজ করবে
+    case 'table': {
+      const target = targetElement.type?.getTargetElement 
+        ? targetElement.type.getTargetElement(targetProps) 
+        : targetElement;
+
+      baseFrames = Math.max(
+        fps,
+        Math.ceil(textLength(target) * tableAnimationConfig.framesPerCharacter),
+      );
+      speedMultiplier = tableAnimationConfig.speedMultiplier;
+      break;
+    }
+
+    case 'image': 
+      baseFrames = Math.round(fps * 3.0);
+      speedMultiplier = imageAnimationConfig.speedMultiplier;
+      break;
+
+    case 'eraser':
+      baseFrames = Math.round(fps * 3.0);
+      speedMultiplier = eraserAnimationConfig.speedMultiplier;
+      break;
+
+    case 'arrowWithText':
+      // তীর + টেক্সটের ক্যারেক্টার মিলিয়ে ফ্রেম বন্টন
+      baseFrames = Math.max(fps * 2.5, textLength(targetElement) * 5);
+      speedMultiplier = paragraphAnimationConfig.speedMultiplier;
+      break;
+
+    default:
+      baseFrames = fps;
+  }
+
+  return {
+    animationFrames: Math.max(1, Math.ceil(baseFrames / speedMultiplier)),
+    progressEnd: 100 / speedMultiplier,
+  };
+};
+export const getSequenceDurationInFrames = (children, fps) => {
+  const elements = React.Children.toArray(children).filter(React.isValidElement);
+  const sequenceIds = [...new Set(elements.map((element) => element.props.sequenceId))].sort((a, b) => a - b);
+  return sequenceIds.reduce((totalFrames, sequenceId) => {
+    const sequenceFrames = elements
+      .filter((element) => element.props.sequenceId === sequenceId)
+      .map((element) => getAnimationFrames(element, fps).animationFrames);
+
+    return totalFrames + Math.max(...sequenceFrames);
+  }, 0);
+};
+

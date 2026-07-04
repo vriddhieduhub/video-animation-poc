@@ -1,0 +1,648 @@
+/* ==========================================================================
+   🎯 WHITEBOARD ENGINE - MEGA TAILWIND-STYLE UTILITY LIBRARY
+   ========================================================================== */
+
+/* --------------------------------------------------
+   🎨 1. TEXT COLORS (মার্কার ও ক্যালিগ্রাফি শেডস)
+   -------------------------------------------------- */
+.text-black        { color: #000000; }
+.text-white        { color: #ffffff; }
+.text-gray         { color: #4b5563; } /* Gray-600 */
+.text-light-gray   { color: #9ca3af; } /* Gray-400 */
+
+/* ব্রাইট মার্কার কালারস */
+.text-red          { color: #e11d48; } /* Rose-600 */
+.text-blue         { color: #1d4ed8; } /* Blue-700 */
+.text-cyan         { color: #0284c7; } /* Sky-600 */
+.text-green        { color: #10b981; } /* Emerald-500 */
+.text-emerald      { color: #047857; } /* Emerald-700 */
+.text-purple       { color: #7e22ce; } /* Purple-700 */
+.text-fuchsia      { color: #c026d3; } /* Fuchsia-600 */
+.text-pink         { color: #db2777; } /* Pink-600 */
+.text-orange       { color: #ea580c; } /* Orange-600 */
+.text-yellow       { color: #d97706; } /* Amber-600 */
+
+/* --------------------------------------------------
+   🎨 2. BACKGROUND COLORS (বোর্ড ও কন্টেইনার শেডস)
+   -------------------------------------------------- */
+.bg-black          { background-color: #000000; }
+.bg-white          { background-color: #ffffff; }
+.bg-gray-50        { background-color: #f9fafb; }
+.bg-gray-100       { background-color: #f3f4f6; }
+
+/* সলিড লাইট ব্যাকগ্রাউন্ড */
+.bg-red            { background-color: #ffe4e6; } /* Rose-100 */
+.bg-blue           { background-color: #dbeafe; } /* Blue-100 */
+.bg-cyan           { background-color: #e0f2fe; } /* Sky-100 */
+.bg-green          { background-color: #d1fae5; } /* Emerald-100 */
+.bg-purple         { background-color: #f3e8ff; } /* Purple-100 */
+.bg-orange         { background-color: #ffedd5; } /* Orange-100 */
+.bg-yellow         { background-color: #fef9c3; } /* Yellow-100 */
+
+/* --------------------------------------------------
+   ✒️ 3. FONT SIZE UTILITIES (ডাইনামিক টেক্সট স্কেলিং ক্লাস)
+   -------------------------------------------------- */
+.text-xs    { font-size: 16px; }
+.text-sm    { font-size: 20px; }
+.text-base  { font-size: 24px; }
+.text-lg    { font-size: 28px; }
+.text-xl    { font-size: 32px; }
+.text-2xl   { font-size: 38px; }
+.text-3xl   { font-size: 45px; }
+.text-4xl   { font-size: 52px; }  /* স্ট্যান্ডার্ড প্যারাগ্রাফ সাইজ */
+.text-5xl   { font-size: 64px; }  /* সাব-হেডিং সাইজ */
+.text-6xl   { font-size: 75px; }  /* নরমাল হেডিং সাইজ */
+.text-7xl   { font-size: 85px; }  
+.text-8xl   { font-size: 95px; }  /* আপনার মেগা হেডিং সাইজ (১০০% লক) */
+.text-9xl   { font-size: 110px; }
+
+/* ==========================================================================
+   📌 4. TOP & LEFT POSITIONING CLASSES (Extended Resolution Grid Lock)
+   ========================================================================== */
+
+/* --------------------------------------------------
+   🔽 --- TOP POSITIONS (0px to 1000px+) ---
+   -------------------------------------------------- */
+.top-0     { top: 0px; }
+.top-5     { top: 5px; }
+.top-10    { top: 10px; }
+.top-15    { top: 15px; }
+.top-20    { top: 20px; }
+.top-25    { top: 25px; }
+.top-30    { top: 30px; }
+.top-35    { top: 35px; }
+.top-40    { top: 40px; }
+.top-45    { top: 45px; }
+.top-50    { top: 50px; }
+.top-60    { top: 60px; }
+.top-70    { top: 70px; }
+.top-80    { top: 80px; }   /* আপনার হেডিংয়ের পারফেক্ট বেস টপ */
+.top-90    { top: 90px; }
+.top-100   { top: 100px; }
+.top-110   { top: 110px; }
+.top-120   { top: 120px; }
+.top-130   { top: 130px; }
+.top-140   { top: 140px; }
+.top-150   { top: 150px; }
+.top-160   { top: 160px; }
+.top-170   { top: 170px; }
+.top-180   { top: 180px; }
+.top-190   { top: 190px; }
+.top-200   { top: 200px; }  /* আন্ডারলাইন ও ২য় লাইনের বেস টপ */
+.top-210   { top: 210px; }
+.top-220   { top: 220px; }
+.top-230   { top: 230px; }
+.top-240   { top: 240px; }
+.top-250   { top: 250px; }
+.top-260   { top: 260px; }
+.top-270   { top: 270px; }
+.top-280   { top: 280px; }
+.top-290   { top: 290px; }
+.top-300   { top: 300px; }
+
+/* ৫০ পিক্সেল গ্যাপে মেগা স্ক্রিন টপ স্কেলিং */
+.top-350   { top: 350px; }
+.top-400   { top: 400px; }
+.top-450   { top: 450px; }
+.top-500   { top: 500px; }
+.top-550   { top: 550px; }
+.top-600   { top: 600px; }
+.top-650   { top: 650px; }
+.top-700   { top: 700px; }
+.top-750   { top: 750px; }
+.top-800   { top: 800px; }
+.top-850   { top: 850px; }
+.top-900   { top: 900px; }
+.top-950   { top: 950px; }
+.top-1000  { top: 1000px; }
+.top-1100  { top: 1100px; }
+.top-1200  { top: 1200px; }
+
+/* --------------------------------------------------
+   ▶️ --- LEFT POSITIONS (0px to 1500px+) ---
+   -------------------------------------------------- */
+.left-0     { left: 0px; }
+.left-5     { left: 5px; }
+.left-10    { left: 10px; }
+.left-15    { left: 15px; }
+.left-20    { left: 20px; }
+.left-25    { left: 25px; }
+.left-30    { left: 30px; }
+.left-35    { left: 35px; }
+.left-40    { left: 40px; }
+.left-45    { left: 45px; }
+.left-50    { left: 50px; }
+.left-60    { left: 60px; }
+.left-70    { left: 70px; }
+.left-80    { left: 80px; }
+.left-90    { left: 90px; }
+.left-100   { left: 100px; } /* আপনার মেইন কনটেন্টের পারফেক্ট বাম মার্জিন */
+.left-110   { left: 110px; }
+.left-120   { left: 120px; }
+.left-130   { left: 130px; }
+.left-140   { left: 140px; }
+.left-150   { left: 150px; }
+.left-160   { left: 160px; }
+.left-170   { left: 170px; }
+.left-180   { left: 180px; }
+.left-190   { left: 190px; }
+.left-200   { left: 200px; }
+.left-220   { left: 220px; }
+.left-240   { left: 240px; }
+.left-250   { left: 250px; }
+.left-260   { left: 260px; }
+.left-280   { left: 280px; }
+.left-300   { left: 300px; }
+
+/* ৫০ পিক্সেল গ্যাপে ফুল এইচডি হরিজন্টাল লেফট স্কেলিং */
+.left-350   { left: 350px; }
+.left-400   { left: 400px; }
+.left-450   { left: 450px; }
+.left-500   { left: 500px; }
+.left-550   { left: 550px; }
+.left-600   { left: 600px; }
+.left-650   { left: 650px; }
+.left-700   { left: 700px; }
+.left-750   { left: 750px; }
+.left-800   { left: 800px; }
+.left-850   { left: 850px; }
+.left-900   { left: 900px; }
+.left-950   { left: 950px; }
+.left-1000  { left: 1000px; }
+.left-1100  { left: 1100px; }
+.left-1200  { left: 1200px; }
+.left-1300  { left: 1300px; }
+.left-1400  { left: 1400px; }
+.left-1500  { left: 1500px; }
+
+/* --------------------------------------------------
+   💛 5. HIGHLIGHT VARIETIES (রিয়েল টেক্সট মার্কার ভ্যারাইটি)
+   -------------------------------------------------- */
+/* --- লাইট/প্যাস্টেল শেডস (আপনার আগেরগুলো) --- */
+.highlight-yellow   { background-color: #fef08a; border-radius: 4px; padding: 0px 6px; } 
+.highlight-purple   { background-color: #e9d5ff; border-radius: 4px; padding: 0px 6px; } 
+.highlight-green    { background-color: #a7f3d0; border-radius: 4px; padding: 0px 6px; } 
+.highlight-blue     { background-color: #bfdbfe; border-radius: 4px; padding: 0px 6px; } 
+.highlight-orange   { background-color: #ffedd5; border-radius: 4px; padding: 0px 6px; } 
+.highlight-pink     { background-color: #fbcfe8; border-radius: 4px; padding: 0px 6px; } 
+.highlight-cyan     { background-color: #bae6fd; border-radius: 4px; padding: 0px 6px; } 
+
+/* 🔥 --- নতুন মেগা ডিপ হাইলাইটার কালেকশন (Deep & High-Contrast) --- */
+.highlight-deep-red {
+  background-color: #be123c; /* Rose-700 */
+  color: #ffffff !important;  /* ডিপ কালারে লেখা অটোমেটিক সাদা হয়ে ফুটবে */
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-blue {
+  background-color: #1d4ed8; /* Blue-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-green {
+  background-color: #047857; /* Emerald-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-purple {
+  background-color: #6b21a8; /* Purple-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-orange {
+  background-color: #c2410c; /* Orange-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-pink {
+  background-color: #be185d; /* Pink-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-cyan {
+  background-color: #0369a1; /* Sky-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+.highlight-deep-yellow {
+  background-color: #b45309; /* Amber-700 */
+  color: #ffffff !important;
+  border-radius: 4px;
+  padding: 0px 6px;
+}
+
+
+/* --------------------------------------------------
+   🔴 6. UNDERLINE STYLES (মাল্টি-কালার মার্কার ও চকবোর্ড স্ট্রোক)
+   -------------------------------------------------- */
+
+/* --- 🔹 ক) সলিড ৪ পিক্সেল স্ট্যান্ডার্ড আন্ডারলাইন --- */
+u {
+   text-decoration: none;
+}
+.underline-red          { border-bottom: 4px solid #e11d48; } /* Rose-600 */
+.underline-blue         { border-bottom: 4px solid #1d4ed8; } /* Blue-700 */
+.underline-green        { border-bottom: 4px solid #10b981; } /* Emerald-500 */
+.underline-black        { border-bottom: 4px solid #000000; }
+.underline-purple       { border-bottom: 4px solid #7e22ce; } /* Purple-700 */
+.underline-orange       { border-bottom: 4px solid #ea580c; } /* Orange-600 */
+.underline-cyan         { border-bottom: 4px solid #0284c7; } /* Sky-600 */
+.underline-fuchsia      { border-bottom: 4px solid #c026d3; } /* Fuchsia-600 */
+.underline-pink         { border-bottom: 4px solid #db2777; } /* Pink-600 */
+.underline-yellow       { border-bottom: 4px solid #d97706; } /* Amber-600 */
+.underline-lime         { border-bottom: 4px solid #65a30d; } /* Lime-600 */
+
+/* --- 🔹 খ) ডাবল স্ট্রোক আন্ডারলাইন (মেগা হাই-কন্ট্রাস্ট) --- */
+.underline-double-red     { border-bottom: 5px double #e11d48; }
+.underline-double-blue    { border-bottom: 5px double #1d4ed8; }
+.underline-double-green   { border-bottom: 5px double #10b981; }
+.underline-double-black   { border-bottom: 5px double #000000; }
+.underline-double-purple  { border-bottom: 5px double #7e22ce; }
+.underline-double-cyan    { border-bottom: 5px double #0284c7; }
+.underline-double-fuchsia { border-bottom: 5px double #c026d3; }
+.underline-double-orange  { border-bottom: 5px double #ea580c; }
+
+/* --- 🔹 গ) ড্যাশড (Dashed) স্ট্রোক কালেকশন --- */
+.underline-dashed-red     { border-bottom: 3px dashed #e11d48; }
+.underline-dashed-blue    { border-bottom: 3px dashed #1d4ed8; }
+.underline-dashed-green   { border-bottom: 3px dashed #10b981; }
+.underline-dashed-black   { border-bottom: 3px dashed #000000; }
+.underline-dashed-purple  { border-bottom: 3px dashed #7e22ce; }
+.underline-dashed-cyan    { border-bottom: 3px dashed #0284c7; }
+
+/* --- 🔹 ঘ) ডটেড (Dotted) মার্কার ট্রেইলস (নতুন) --- */
+.underline-dotted-red     { border-bottom: 4px dotted #e11d48; }
+.underline-dotted-blue    { border-bottom: 4px dotted #1d4ed8; }
+.underline-dotted-green   { border-bottom: 4px dotted #10b981; }
+.underline-dotted-black   { border-bottom: 4px dotted #000000; }
+.underline-dotted-purple  { border-bottom: 4px dotted #7e22ce; }
+.underline-dotted-fuchsia { border-bottom: 4px dotted #c026d3; }
+
+/* --- 🔹 ঙ) আল্ট্রা-থিক থিকনেস মেগা স্ট্রোক (6px - হেডিং বা বোল্ড টেক্সটের নিচে দেওয়ার জন্য) --- */
+.underline-thick-red      { border-bottom: 6px solid #e11d48; }
+.underline-thick-blue     { border-bottom: 6px solid #1d4ed8; }
+.underline-thick-green    { border-bottom: 6px solid #10b981; }
+.underline-thick-purple   { border-bottom: 6px solid #7e22ce; }
+.underline-thick-yellow   { border-bottom: 6px solid #d97706; }
+
+
+
+/* --------------------------------------------------
+   ✒️ 7. FONT STYLES & WEIGHTS
+   -------------------------------------------------- */
+.bold, .font-bold { font-weight: 700; }
+.italic           { font-style: italic; }
+.font-normal      { font-weight: 400; }
+
+/* --------------------------------------------------
+   📍 8. POSITIONING SYSTEM (আপনার ইঞ্জিনের মেইন চাবি)
+   -------------------------------------------------- */
+.absolute { position: absolute; }
+.relative { position: relative; }
+.static   { position: static; }
+.fixed   { position: fixed; }
+
+/* --------------------------------------------------
+   📦 9. PADDING UTILITIES (P)
+   -------------------------------------------------- */
+.p-0 { padding: 0px; }
+.p-1 { padding: 4px; }
+.p-2 { padding: 8px; }
+.p-3 { padding: 12px; }
+.p-4 { padding: 16px; }
+.p-5 { padding: 20px; }
+
+/* Horizontal (Left-Right) Padding */
+.px-1 { padding-left: 4px; padding-right: 4px; }
+.px-2 { padding-left: 8px; padding-right: 8px; }
+.px-3 { padding-left: 12px; padding-right: 12px; }
+.px-4 { padding-left: 16px; padding-right: 16px; }
+
+/* Vertical (Top-Bottom) Padding */
+.py-1 { padding-top: 4px; padding-bottom: 4px; }
+.py-2 { padding-top: 8px; padding-bottom: 8px; }
+.py-3 { padding-top: 12px; padding-bottom: 12px; }
+.py-4 { padding-top: 16px; padding-bottom: 16px; }
+
+/* --------------------------------------------------
+   📦 10. MARGIN UTILITIES (M)
+   -------------------------------------------------- */
+.m-0 { margin: 0px; }
+.m-1 { margin: 4px; }
+.m-2 { margin: 8px; }
+.m-3 { margin: 12px; }
+.m-4 { margin: 16px; }
+.mx-auto { margin-left: auto; margin-right: auto; }
+
+
+
+/* ==========================================================================
+   🔳 11. BORDERS & RADIUS - Mega Style & Thickness Grid
+   ========================================================================== */
+
+/* --- 🔹 ক) বর্ডার থিকনেস (Border Thickness) --- */
+.border-0 { border-width: 0px; }
+.border   { border: 2px solid #e5e7eb; } /* ডিফল্ট টেলউইন্ড স্টাইল */
+.border-1 { border-width: 1px; }
+.border-2 { border-width: 2px; }
+.border-3 { border-width: 3px; }
+.border-4 { border-width: 4px; }
+.border-6 { border-width: 6px; }
+.border-8 { border-width: 8px; } /* হোয়াইটবোর্ড মেগা ফ্রেমের জন্য */
+
+/* --- 🔹 খ) বর্ডার কালারস (Border Colors) --- */
+.border-black        { border-color: #000000; }
+.border-white        { border-color: #ffffff; }
+.border-gray         { border-color: #9ca3af; } /* Gray-400 */
+.border-red          { border-color: #e11d48; } /* Rose-600 */
+.border-blue         { border-color: #1d4ed8; } /* Blue-700 */
+.border-green        { border-color: #10b981; } /* Emerald-500 */
+.border-purple       { border-color: #7e22ce; } /* Purple-700 */
+.border-orange       { border-color: #ea580c; } /* Orange-600 */
+.border-cyan         { border-color: #0284c7; } /* Sky-600 */
+.border-fuchsia      { border-color: #c026d3; } /* Fuchsia-600 */
+.border-pink         { border-color: #db2777; } /* Pink-600 */
+.border-yellow       { border-color: #d97706; } /* Amber-600 */
+
+/* --- 🔹 গ) বর্ডার স্টাইলস (Border Styles) --- */
+.border-solid        { border-style: solid; }
+.border-dashed       { border-style: dashed; }
+.border-dotted       { border-style: dotted; }
+.border-double       { border-style: double; }
+
+/* --- 🔹 ঘ) রেডিমেড শর্টকাট কম্বিনেশন (Quick Utilities) --- */
+.border-dashed-blue  { border: 3px dashed #1d4ed8; }
+.border-dashed-red   { border: 3px dashed #e11d48; }
+.border-dashed-green { border: 3px dashed #10b981; }
+.border-double-black { border: 5px double #000000; }
+
+/* --- 🔹 ঙ) বর্ডার রেডিয়াস (Border Radius) --- */
+.rounded-none { border-radius: 0px; }
+.rounded-sm   { border-radius: 2px; }
+.rounded      { border-radius: 4px; }
+.rounded-md   { border-radius: 6px; }
+.rounded-lg   { border-radius: 8px; }
+.rounded-xl   { border-radius: 12px; }
+.rounded-2xl  { border-radius: 16px; }
+.rounded-3xl  { border-radius: 24px; }
+.rounded-full { border-radius: 9999px; }
+
+
+/* ==========================================================================
+   📐 12. WIDTH & HEIGHT UTILITIES (Image & Container Dimension Scale)
+   ========================================================================== */
+
+/* --- 🔹 ক) উইডথ স্কেলিং ক্লাস (Width Classes) --- */
+.w-auto   { width: auto; }
+.w-full   { width: 100%; }
+
+/* ১০px থেকে ১০০px (ছোট আইকন বা লোগোর জন্য ১০ পিক্সেল গ্যাপে) */
+.w-10    { width: 10px; }
+.w-20    { width: 20px; }
+.w-30    { width: 30px; }
+.w-40    { width: 40px; }
+.w-50    { width: 50px; }
+.w-60    { width: 60px; }
+.w-70    { width: 70px; }
+.w-80    { width: 80px; }
+.w-90    { width: 90px; }
+.w-100   { width: 100px; }
+
+/* ১২০px থেকে ৪০০px (ইমেজ এবং কার্ডের জন্য ২০ পিক্সেল গ্যাপে) */
+.w-120   { width: 120px; }
+.w-140   { width: 140px; }
+.w-160   { width: 160px; }
+.w-180   { width: 180px; }
+.w-200   { width: 200px; }
+.w-220   { width: 220px; }
+.w-240   { width: 240px; }
+.w-260   { width: 260px; }
+.w-280   { width: 280px; }
+.w-300   { width: 300px; }
+.w-320   { width: 320px; }
+.w-340   { width: 340px; }
+.w-360   { width: 360px; }
+.w-380   { width: 380px; } /* আপনার ১ম ও ২য় ইমেজের নিখুঁত উইডথ (৩৮০px লক) */
+.w-400   { width: 400px; }
+
+/* ৪৫০px থেকে ৮০০px+ (মেগা বক্স বা চকবোর্ড সেকশনের জন্য ৫০ পিক্সেল গ্যাপে) */
+.w-450   { width: 450px; }
+.w-500   { width: 500px; }
+.w-550   { width: 550px; }
+.w-600   { width: 600px; }
+.w-650   { width: 650px; }
+.w-700   { width: 700px; }
+.w-750   { width: 750px; }
+.w-800   { width: 800px; }
+.w-900   { width: 900px; }
+.w-1000  { width: 1000px; }
+.w-1100  { width: 1100px; }
+.w-1200  { width: 1200px; }
+.w-1250  { width: 1250px; }
+.w-1300  { width: 1300px; }
+.w-1350  { width: 1350px; }
+.w-1400  { width: 1400px; }
+.w-1450  { width: 1450px; }
+.w-1500  { width: 1500px; }
+.w-1550  { width: 1550px; }
+.w-1600  { width: 1600px; }
+.w-1650  { width: 1650px; }
+.w-1700  { width: 1700px; }
+.w-1750  { width: 1750px; }
+.w-1800  { width: 1800px; }
+.w-1850  { width: 1850px; }
+.w-1900  { width: 1900px; }
+.w-1350  { width: 1350px; }
+.w-1400  { width: 1400px; }
+.w-1450  { width: 1450px; }
+.w-1500  { width: 1500px; }
+.w-1550  { width: 1550px; }
+.w-1600  { width: 1600px; }
+.w-1650  { width: 1650px; }
+.w-1700  { width: 1700px; }
+.w-1750  { width: 1750px; }
+.w-1800  { width: 1800px; }
+.w-1850  { width: 1850px; }
+.w-1900  { width: 1900px; }
+.w-1920  { width: 1920px; }
+
+
+/* --- 🔹 খ) হাইট স্কেলিং ক্লাস (Height Classes) --- */
+.h-auto   { height: auto; }
+.h-full   { height: 100%; }
+
+/* ১০px থেকে ১০০px */
+.h-10    { height: 10px; }
+.h-20    { height: 20px; }
+.h-30    { height: 30px; }
+.h-40    { height: 40px; }
+.h-50    { height: 50px; }
+.h-60    { height: 60px; }
+.h-70    { height: 70px; }
+.h-80    { height: 80px; }
+.h-90    { height: 90px; }
+.h-100   { height: 100px; }
+
+/* ১২০px থেকে ৪০০px */
+.h-120   { height: 120px; }
+.h-140   { height: 140px; }
+.h-160   { height: 160px; }
+.h-180   { height: 180px; }
+.h-200   { height: 200px; }
+.h-220   { height: 220px; }
+.h-240   { height: 240px; }
+.h-260   { height: 260px; }
+.w-280   { width: 280px; }
+.h-300   { height: 300px; }
+.h-320   { height: 320px; }
+.h-340   { height: 340px; }
+.h-360   { height: 360px; }
+.h-380   { height: 380px; } /* আপনার ইমেজের নিখুঁত হাইট (৩৮০px লক) */
+.h-400   { height: 400px; }
+
+/* ৪৫০px থেকে ৮০০px+ */
+.h-450   { height: 450px; }
+.h-500   { height: 500px; }
+.h-550   { height: 550px; }
+.h-600   { height: 600px; }
+.h-650   { height: 650px; }
+.h-700   { height: 700px; }
+.h-750   { height: 750px; }
+.h-800   { height: 800px; }
+.h-850   { height: 850px; }
+.h-900   { height: 900px; }
+.h-950   { height: 950px; }
+.h-1000   { height: 1000px; }
+.h-1050   { height: 1050px; }
+.h-1100   { height: 1100px; }
+.h-1150   { height: 1150px; }
+.h-1200   { height: 1200px; }
+.h-1250   { height: 1250px; }
+
+/* --------- Most important css ------------- */
+
+/* --- 🖼️ 🔹 OBJECT FIT UTILITIES (ইমেজ ফিটিং ম্যাজিক) --- */
+.object-contain {
+  object-fit: contain; /* ইমেজের রেশিও ঠিক রেখে ফ্রেমের ভেতর পুরোটা দেখাবে */
+}
+
+.object-cover {
+  object-fit: cover; /* ফ্রেম জুটিয়ে ইমেজ বসিয়া দেবে, কোনো কোণা ফাঁকা থাকবে না */
+}
+
+.object-fill {
+  object-fit: fill; /* ইমেজকে জোর করে টেনে-হিঁচড়ে ফ্রেমের সাইজে ফিট করাবে */
+}
+
+/* ==========================================================================
+   🔤 13. INTERESTING HANDWRITING & TEACHING FONTS  GOOGLE FONTS IMPORT (হ্যান্ডরাইটিং ও টিচিং অ্যানিমেশন স্পেশাল)
+   ========================================================================== */
+
+/* ১. Kalam: একদম খাঁটি রিয়েলিস্টিক মার্কার পেন বা বলপেন রাইটিং ফিল (হোয়াইটবোর্ডের রাজা) */
+.font-kalam { font-family: 'Kalam', cursive, sans-serif; }
+
+/* ২. Caveat: একটু স্টাইলিশ রানিং হ্যান্ডরাইটিং বা সিগনেচার স্টাইল */
+.font-caveat { font-family: 'Caveat', cursive, sans-serif; }
+
+/* ৩. Patrick Hand: বাচ্চাদের ক্লাসরুম বা কমিক বুক টিচিং স্টাইলের নিখুঁত ফন্ট */
+.font-patrick { font-family: 'Patrick Hand', cursive, sans-serif; }
+
+/* ৪. Architects Daughter: একদম আর্কিটেক্টদের ড্রয়িং শিটের মতো ক্রিস্প অ্যান্ড শার্প হ্যান্ডরাইটিং */
+.font-architect { font-family: 'Architects Daughter', cursive, sans-serif; }
+
+/* ৫. Delius: একদম গোল গোল, পরিষ্কার ও মার্জিত স্কুলবুক ক্যালিগ্রাফি */
+.font-delius { font-family: 'Delius', cursive, sans-serif; }
+
+/* ৬. Fredoka: বোল্ড হেডিং-এর জন্য কিউট ও গোলগাল রাউন্ডেড ফন্ট (চকবোর্ড লুকের জন্য বেস্ট) */
+.font-fredoka { font-family: 'Fredoka', sans-serif; }
+
+/* ৭. Comfortaa: মডার্ন টেকনিক্যাল স্লাইড ও ক্রিস্প রিডেবিলিটির জন্য চমৎকার জ্যামিতিক ফন্ট */
+.font-comfortaa { font-family: 'Comfortaa', sans-serif; }
+
+/* ৮. Shadow Into Light: একদম চিকন কলমে ঝটপট লেখা ক্যাজুয়াল ডায়েরি হ্যান্ডরাইটিং ফিল */
+.font-shadow { font-family: 'Shadows Into Light', cursive, sans-serif; }
+
+/* ৯. Amatic SC: অল-ক্যাপস (সব বড় হাতের) আর্ট স্টাইল ফন্ট, কমিক বা ইনফোগ্রাফিক হেডিংয়ের জন্য জোস */
+.font-amatic { font-family: 'Amatic SC', cursive, sans-serif; }
+
+/* ১০. Permanent Marker: থিক স্কেচ পেন বা মোটা মার্কার দিয়ে বোর্ডে হাইলাইট করার ম্যাসসিভ ফন্ট */
+.font-marker { font-family: 'Permanent Marker', cursive, sans-serif; }
+
+/* ১১. Indie Flower: একটু গোলগাল, বাবলি এবং অত্যন্ত কিউট ও ফ্রেন্ডলি হাতের লেখা */
+.font-indie { font-family: 'Indie Flower', cursive, sans-serif; }
+
+/* ১২. Just Another Hand: একদম খাড়া খাড়া, চিকন ও লম্বাটে ক্যারেক্টার—রিয়েল চকবোর্ড রাফ নোটের ফিল দেয় */
+.font-another-hand { font-family: 'Just Another Hand', cursive, sans-serif; }
+
+/* ১৩. Rock Salt: একদম কাঁচা হাতের স্ক্র্যাচ বা চকের ড্রয়িং লুক (হেডিং বা কোনো কিছু কেটে দেওয়ার স্টাইলে দারুণ) */
+.font-rock-salt { font-family: 'Rock Salt', cursive, sans-serif; }
+
+/* ১৪. Quicksand: স্লাইডের টেকনিক্যাল কোড এক্সপ্লেনেশন বা সাব-টেক্সটের জন্য সুপার-ক্লিন রাউন্ডেড জ্যামিতিক ফন্ট */
+.font-quicksand { font-family: 'Quicksand', sans-serif; }
+
+/* ১৫. Pangolin: খুব সুন্দর, সমান এবং অত্যন্ত রিডেবল টিচিং নোটবুক ফন্ট */
+.font-pangolin { font-family: 'Pangolin', cursive, sans-serif; }
+
+
+/*ভিডিওর মেইন হেডিং: .font-marker (মোটা মার্কার ফিল) অথবা .font-amatic (আর্ট লুকে বড় করে দেখানোর জন্য)।
+
+প্যারাগ্রাফ বা রেগুলার টিচিং: .font-pangolin বা .font-indie (এগুলো চোখের জন্য খুব সুদিং এবং রেন্ডার হওয়ার পর একদম খাতার লেখার মতো খোলে)।
+
+চকবোর্ড বা সাইড নোট: .font-another-hand বা .font-shadow (একদম রিয়েল টাইম ক্লাসরুমের রাফ ড্রাফটের ভাইব দেবে)।
+*/
+
+
+/* ==========================================================================
+   層 14. Z-INDEX LAYERING UTILITIES (লেআউটের ওভারল্যাপ কন্ট্রোল)
+   ========================================================================== */
+.z-auto  { z-index: auto; }
+.z-0     { z-index: 0; }
+.z-1     { z-index: 1; }
+.z-2     { z-index: 2; }
+.z-5     { z-index: 5; }
+.z-10    { z-index: 10; }  /* সাধারণত টেক্সট বা ব্যাকগ্রাউন্ড বক্সের জন্য */
+.z-20    { z-index: 20; }
+.z-30    { z-index: 30; }
+.z-40    { z-index: 40; }
+.z-50    { z-index: 50; }  /* পপআপ বা ওভারলে ফ্রেমের জন্য */
+.z-100   { z-index: 100; } /* আপনার অ্যানিমেশন পেনের হাতের জন্য (হাত সবসময় ওপরে থাকবে) */
+.z-999   { z-index: 999; }
+
+
+/* ==========================================================================
+   📏 15. LINE HEIGHT UTILITIES (Leading Classes for Text Spacing)
+   ========================================================================== */
+
+/* ১. leading-none: একদম টাইট বা জিরো গ্যাপ (মূলত আল্ট্রা-বোল্ড মেগা হেডিংয়ের জন্য) */
+.leading-none     { line-height: 1; }
+
+/* ২. leading-tight: কম গ্যাপ (বড় সাইজের টাইটেল বা ২ লাইনের হেডিংয়ের জন্য বেস্ট) */
+.leading-tight    { line-height: 1.25; }
+
+/* ৩. leading-snug: হালকা চিপা গ্যাপ (সাব-হেডিং বা বড় প্যারাগ্রাফ কন্টেন্টের জন্য) */
+.leading-snug     { line-height: 1.375; }
+
+/* ৪. leading-normal: স্ট্যান্ডার্ড ডিফল্ট গ্যাপ (সাধারণ টেক্সটের জন্য) */
+.leading-normal   { line-height: 1.5; }
+
+/* ৫. leading-relaxed: চমৎকার ছড়ানো গ্যাপ (হ্যান্ডরাইটিং বা মার্কার পেন প্যারাগ্রাফের জন্য ১ নম্বর চয়েস) */
+.leading-relaxed  { line-height: 1.625; }
+
+/* ৬. leading-loose: মেগা গ্যাপ (যদি লাইনের মাঝে খাতার রুলিং লাইনের মতো বড় ফাঁকা জায়গা চান) */
+.leading-loose    { line-height: 2; }
+
+
+/* --- 🎯 হোয়াইটবোর্ড স্পেশাল কাস্টম পিক্সেল বেসড লাইন-হাইট (নিখুঁত গ্রিড ম্যাচিংয়ের জন্য) --- */
+.leading-40       { line-height: 40px; }
+.leading-50       { line-height: 50px; }
+.leading-60       { line-height: 60px; }
+.leading-70       { line-height: 70px; }
+.leading-80       { line-height: 80px; }
+.leading-90       { line-height: 90px; }
+.leading-100      { line-height: 100px; }
