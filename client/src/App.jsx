@@ -238,7 +238,7 @@ const startPreview = useCallback(() => {
   }, [stopPreview]); // dependency তে stopPreview অবশ্যই যুক্ত থাকবে
 
 
-  
+
 
   // const handleTogglePlay = useCallback(() => {
   //   if (isPlaying) stopPreview();
@@ -248,43 +248,50 @@ const startPreview = useCallback(() => {
 
 
 
-// ── 🎬 অডিও + ভিডিও একসাথে স্ক্রিন রেকর্ড করার লজিক ──
+// ── 🎬 HIGH-QUALITY AUDIO + VIDEO RECORDING LOGIC ──
   const handleTogglePlay = useCallback(async () => {
     if (isPlaying) {
-      // যদি অলরেডি চলে, তবে পজ/স্টপ হবে (যা stopPreview-কে কল করবে এবং ডাউনলোড হবে)
       stopPreview();
     } else {
       try {
-        // ১. ব্রাউজারের ট্যাব/স্ক্রিন এবং অডিও ক্যাপচার করার প্রম্পট ওপেন হবে
+        // ১. ব্রাউজার স্ক্রিন ক্যাপচার কনফিগারেশন (ভিডিওর কোয়ালিটি এখানে লক করা হচ্ছে)
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: {
-            width: 1920,
-            height: 1080,
-            frameRate: 30
+            width: { ideal: 1920 },    // ফুল এইচডি (1080p) লক করা হলো, আপনার স্ক্রিন 4K হলে 3840 দিতে পারেন
+            height: { ideal: 1080 },
+            frameRate: { ideal: 60 },  // ৩০ FPS থেকে বাড়িয়ে ৬০ FPS করা হলো যাতে স্মুথ হয়
+            displaySurface: "browser"  // ব্রাউজারকে ট্যাব রেকর্ডিংয়ে প্রায়োরিটি দিতে বাধ্য করা
           },
           audio: {
-            echoCancellation: false,
+            echoCancellation: false,   // অডিওর কোয়ালিটি অরজিনাল রাখার জন্য ফিল্টার অফ
             noiseSuppression: false,
-            autoGainControl: false
-          }
+            autoGainControl: false,
+            channelCount: 2            // স্টেরিও সাউন্ডের জন্য
+          },
+          preferCurrentTab: true, 
+          selfBrowserSurface: "include"
         });
 
         streamRef.current = stream;
 
-        // ২. RecordRTC কনফিগারেশন
+        // ২. RecordRTC কনফিগারেশন (বিটরেট এবং কম্প্রেশন কন্ট্রোল)
         recorderRef.current = new RecordRTC(stream, {
           type: 'video',
-          mimeType: 'video/webm;codecs=vp9,opus', // হাই-কোয়ালিটি ভিডিও ও অডিওর জন্য
-          bitsPerSecond: 12800000 // ঝকঝকে কোয়ালিটির জন্য বিটরেট বাড়িয়ে দেওয়া হলো
+          mimeType: 'video/webm;codecs=vp9,opus', // VP9 কোডেক অনেক বেশি শার্প এবং হাই-কোয়ালিটি দেয়
+          
+          // 🔥 বিটরেট বাড়িয়ে দেওয়া হলো (প্রায় ৫০ Mbps), যা ভিডিওর ঝাপসা ভাব বা পিক্সেল ভেঙে যাওয়া একদম বন্ধ করবে
+          bitsPerSecond: 50000000, 
+          
+          frameInterval: 16, // ৬০ FPS-এর জন্য ফ্রেম ইন্টারভাল (1000ms / 60)
+          videoBitsPerSecond: 50000000
         });
 
         // রেকর্ডিং শুরু
         recorderRef.current.startRecording();
 
-        // ৩. স্ক্রিন শেয়ার পারমিশন পাওয়ার পরেই অ্যানিমেশন প্লেব্যাক স্টার্ট হবে
+        // অ্যানিমেশন প্লেব্যাক স্টার্ট
         startPreview();
 
-        // যদি ইউজার ম্যানুয়ালি ব্রাউজারের "Stop Sharing" বাটনে ক্লিক করে, তবে যেন ডাউনলোড ট্রিগার হয়
         stream.getVideoTracks()[0].onended = () => {
           stopPreview();
         };
@@ -295,8 +302,7 @@ const startPreview = useCallback(() => {
       }
     }
   }, [isPlaying, stopPreview, startPreview]);
-
-
+  
 
 
   const handleReset = useCallback(() => {
