@@ -5,6 +5,7 @@ import React, {
   useCallback,
   useMemo,
 } from 'react';
+import RecordRTC from 'recordrtc';
 
 import { parseConfig, applyAudioDurations } from './engine/configParser.js';
 import { AudioManager }  from './engine/audioManager.js';
@@ -27,6 +28,10 @@ export default function App() {
   // Falls back to an empty scene on load error.
   const [configHtml,  setConfigHtml]  = useState('');
   const [configReady, setConfigReady] = useState(false);
+
+  // RecordRTC কে ট্র্যাক করার জন্য একটি রেফ
+ const recorderRef = useRef(null);
+  const streamRef   = useRef(null);
 
   useEffect(() => {
     fetch('/config/scene.html')
@@ -139,19 +144,67 @@ export default function App() {
   // ─────────────────────────────────────────────────────────────────────────
   // PREVIEW PLAYBACK
   // ─────────────────────────────────────────────────────────────────────────
-  const stopPreview = useCallback(() => {
+  // const stopPreview = useCallback(() => {
+  //   if (rafRef.current) {
+  //     cancelAnimationFrame(rafRef.current);
+  //     rafRef.current = null;
+  //   }
+  //   lastTsRef.current = null;
+  //   setIsPlaying(false);
+  // }, []);
+
+
+  // ── 🎬 অ্যানিমেশন স্টপ এবং অটো-ডাউনলোড লজিক ──
+const stopPreview = useCallback(() => {
+    // ১. চলমান অ্যানিমেশন ফ্রেম বন্ধ করুন
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
     lastTsRef.current = null;
     setIsPlaying(false);
+
+    // ২. RecordRTC রেকর্ডিং স্টপ এবং অটো-ডাউনলোড লজিক
+    if (recorderRef.current) {
+      console.log("Stopping recorder and generating video file...");
+      
+      recorderRef.current.stopRecording(() => {
+        const blob = recorderRef.current.getBlob();
+        const url = URL.createObjectURL(blob);
+        
+        // ফাইলটি ব্রাউজারে অটোমেটিক ডাউনলোড করানোর জন্য লিঙ্ক তৈরি
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `whiteboard-video-${Date.now()}.webm`; // অডিওসহ .webm ফাইল নাম
+        a.click();
+        
+        // রেকর্ডার ও স্ট্রিম ক্লিনআপ (যাতে স্ক্রিন শেয়ারিং আইকন চলে যায়)
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current = null;
+        }
+        recorderRef.current.destroy();
+        recorderRef.current = null;
+      });
+    }
+
+    if (audioManagerRef.current) {
+      audioManagerRef.current.reset();
+    }
   }, []);
 
-  const startPreview = useCallback(() => {
+
+
+
+
+
+
+
+
+
+const startPreview = useCallback(() => {
     if (isExportingRef.current || !scenesRef.current.length) return;
 
-    // Use ref values — these are always current even after async audio preload updates
     if (currentTimeRef.current >= totalDurationRef.current) {
       currentTimeRef.current = 0;
       setCurrentTime(0);
@@ -166,7 +219,6 @@ export default function App() {
       const delta = (ts - lastTsRef.current) / 1000;
       lastTsRef.current = ts;
 
-      // Always read totalDuration from ref — never from closure
       const dur     = totalDurationRef.current;
       const newTime = Math.min(currentTimeRef.current + delta, dur);
       currentTimeRef.current = newTime;
@@ -176,19 +228,76 @@ export default function App() {
       if (newTime < dur) {
         rafRef.current = requestAnimationFrame(frame);
       } else {
-        setIsPlaying(false);
-        rafRef.current = null;
+        // 🎯 ফিক্স: টাইমলাইন শেষ হওয়া মাত্রই সরাসরি stopPreview() কল হবে, 
+        // যা অটোমেটিক রেকর্ডার স্টপ করে ডাউনলোড প্রম্পট নিয়ে আসবে।
+        stopPreview();
       }
     }
 
     rafRef.current = requestAnimationFrame(frame);
-  // No deps on scenes/totalDuration — reads from refs inside frame()
-  }, []);
+  }, [stopPreview]); // dependency তে stopPreview অবশ্যই যুক্ত থাকবে
 
-  const handleTogglePlay = useCallback(() => {
-    if (isPlaying) stopPreview();
-    else           startPreview();
-  }, [isPlaying, startPreview, stopPreview]);
+
+  
+
+  // const handleTogglePlay = useCallback(() => {
+  //   if (isPlaying) stopPreview();
+  //   else           startPreview();
+  // }, [isPlaying, startPreview, stopPreview]);
+
+
+
+
+// ── 🎬 অডিও + ভিডিও একসাথে স্ক্রিন রেকর্ড করার লজিক ──
+  const handleTogglePlay = useCallback(async () => {
+    if (isPlaying) {
+      // যদি অলরেডি চলে, তবে পজ/স্টপ হবে (যা stopPreview-কে কল করবে এবং ডাউনলোড হবে)
+      stopPreview();
+    } else {
+      try {
+        // ১. ব্রাউজারের ট্যাব/স্ক্রিন এবং অডিও ক্যাপচার করার প্রম্পট ওপেন হবে
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            width: 1920,
+            height: 1080,
+            frameRate: 30
+          },
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          }
+        });
+
+        streamRef.current = stream;
+
+        // ২. RecordRTC কনফিগারেশন
+        recorderRef.current = new RecordRTC(stream, {
+          type: 'video',
+          mimeType: 'video/webm;codecs=vp9,opus', // হাই-কোয়ালিটি ভিডিও ও অডিওর জন্য
+          bitsPerSecond: 12800000 // ঝকঝকে কোয়ালিটির জন্য বিটরেট বাড়িয়ে দেওয়া হলো
+        });
+
+        // রেকর্ডিং শুরু
+        recorderRef.current.startRecording();
+
+        // ৩. স্ক্রিন শেয়ার পারমিশন পাওয়ার পরেই অ্যানিমেশন প্লেব্যাক স্টার্ট হবে
+        startPreview();
+
+        // যদি ইউজার ম্যানুয়ালি ব্রাউজারের "Stop Sharing" বাটনে ক্লিক করে, তবে যেন ডাউনলোড ট্রিগার হয়
+        stream.getVideoTracks()[0].onended = () => {
+          stopPreview();
+        };
+
+      } catch (error) {
+        console.error("Recording prompt failed or cancelled:", error);
+        alert("Recording start করার জন্য স্ক্রিন/ট্যাব শেয়ার পারমিশন প্রয়োজন।");
+      }
+    }
+  }, [isPlaying, stopPreview, startPreview]);
+
+
+
 
   const handleReset = useCallback(() => {
     stopPreview();
