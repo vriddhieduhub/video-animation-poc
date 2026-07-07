@@ -13,9 +13,10 @@
     "list-voices:en": "node server/list-voices.js en-US"
   },
   "dependencies": {
-    "edge-tts-node": "^2.0.11",
+    "edge-tts-node": "^1.1.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "recordrtc": "^5.6.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",

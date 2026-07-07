@@ -48,7 +48,7 @@ function computeAnimDuration(type, content, rawClasses) {
     case 'image':
       return TYPING_SPEED.image.fixedDuration;
     case 'eraser':
-      return ANIMATION_CONFIG.eraser.speed.durationInFrames / FPS;
+      return ANIMATION_CONFIG.eraser.speed.totalDurationFrames / FPS;
     default:
       return 0.5; // dividers are near-instant
   }

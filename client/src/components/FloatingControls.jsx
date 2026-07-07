@@ -43,13 +43,11 @@ export default function FloatingControls({
         display:      'flex',
         alignItems:   'center',
         gap:          '4px',
-        background:   'rgba(8, 8, 20, 0.54)',
-        backdropFilter: 'blur(10px)',
+        background:   'transparent',
         border:       '1px solid rgba(255,255,255,0.07)',
         borderRadius: '22px',
         padding:      '4px 8px',
         userSelect:   'none',
-        boxShadow:    '0 3px 14px rgba(0,0,0,0.34)',
         opacity:      0.72,
         transition:   'opacity 0.2s',
       }}
@@ -57,14 +55,14 @@ export default function FloatingControls({
       onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.82')}
     >
       {/* ── Reset ── */}
-      <IconBtn
+      {/* <IconBtn
         onClick={onReset}
         disabled={isExporting}
         title="Reset to frame 0  (R)"
         color="#6366f1"
       >
         ⏮
-      </IconBtn>
+      </IconBtn> */}
 
       {/* ── Play / Pause ── */}
       <IconBtn
@@ -72,13 +70,13 @@ export default function FloatingControls({
         disabled={isExporting}
         title={isPlaying ? 'Pause  (Space)' : 'Play Preview  (Space)'}
         color={isPlaying ? '#ef4444' : '#22c55e'}
-        large
+        small
       >
         {isPlaying ? '⏸' : '▶'}
       </IconBtn>
 
       {/* ── Seek bar ── */}
-      <div
+      {/* <div
         onClick={handleSeekClick}
         title="Seek — click anywhere"
         style={{
@@ -101,10 +99,10 @@ export default function FloatingControls({
             transition: 'none',
           }}
         />
-      </div>
+      </div> */}
 
       {/* ── Time readout ── */}
-      <span
+      {/* <span
         style={{
           fontSize:   '9px',
           color:      isExporting ? '#f59e0b' : 'rgba(255,255,255,0.55)',
@@ -118,13 +116,13 @@ export default function FloatingControls({
         {isExporting
           ? `${exportProgress}%`
           : `${fmt(currentTime)} / ${fmt(totalDuration)}`}
-      </span>
+      </span> */}
 
       {/* ── Divider ── */}
       <div style={{ width: '1px', height: '12px', background: 'rgba(255,255,255,0.1)' }} />
 
       {/* ── Export / Cancel ── */}
-      {isExporting ? (
+      {/* {isExporting ? (
         <IconBtn
           onClick={onCancelExport}
           title="Cancel export"
@@ -141,7 +139,7 @@ export default function FloatingControls({
         >
           📁
         </IconBtn>
-      )}
+      )} */}
     </div>
   );
 }
@@ -169,6 +167,7 @@ function IconBtn({ children, onClick, disabled, title, color, large }) {
         justifyContent: 'center',
         padding:      0,
         flexShrink:   0,
+        opacity:     0.4,
         transition:   'background 0.15s, transform 0.1s',
       }}
       onMouseEnter={(e) => {
