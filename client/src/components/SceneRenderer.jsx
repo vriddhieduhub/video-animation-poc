@@ -159,7 +159,7 @@ export default function SceneRenderer({ scene, currentTime }) {
       }}
     >
       {/* Scene badge top-right */}
-      <span
+      {/* <span
         style={{
           position:      'absolute',
           top:           '28px',
@@ -174,7 +174,7 @@ export default function SceneRenderer({ scene, currentTime }) {
         }}
       >
         Scene {sceneId}
-      </span>
+      </span> */}
 
       {elements.map((el, idx) => {
         const seqStart = seqStartTimes[idx];
