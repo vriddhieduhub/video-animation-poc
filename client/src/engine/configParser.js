@@ -45,6 +45,14 @@ function computeAnimDuration(type, content, rawClasses) {
       );
       return Math.min(frames, cfg.maxDuration * FPS) / FPS;
     }
+    case 'table': {
+      const cfg = TYPING_SPEED.table;
+      const frames = Math.max(
+        cfg.minDuration * FPS,
+        plainLen * cfg.framesPerCharacter,
+      );
+      return Math.min(frames, cfg.maxDuration * FPS) / FPS;
+    }
     case 'image':
       return TYPING_SPEED.image.fixedDuration;
     case 'eraser':
@@ -152,6 +160,9 @@ export function parseConfig(htmlString) {
       } else if (tag === 'img') {
         type    = 'image';
         content = child.getAttribute('src') || '';
+      } else if (tag === 'table') {
+        type    = 'table';
+        content = child.innerHTML.trim(); // keep full thead/tbody/tr/th/td markup
       }
 
       const animDuration = computeAnimDuration(type, content, rawClasses);

@@ -119,6 +119,31 @@ export const ANIMATION_CONFIG = {
     },
   },
 
+  // টেবিল (Table) অ্যানিমেশন সেটিংস — সারি ধরে ধরে (row by row) হাতে লেখার মতো
+  table: {
+    // লেখার গতি (Writing Speed)
+    speed: {
+      // প্রতি অক্ষরের জন্য ফ্রেম সংখ্যা।
+      framesPerCharacter: 4,
+      // সর্বনিম্ন সময়কাল (সেকেন্ডে)।
+      minDuration: 5.0,
+      // সর্বোচ্চ সময়কাল (সেকেন্ডে)।
+      maxDuration: 32.0,
+      // মোট অ্যানিমেশনের যত অংশ শুধু খালি টেবিলের ছক/বর্ডার আঁকতে ব্যয় হবে
+      // (কন্টেন্ট লেখা শুরু হওয়ার আগে)।
+      gridDrawRatio: 0.12,
+    },
+    // হাতের নড়াচড়া (Hand Movement)
+    hand: {
+      waveAmplitude: 8,
+      waveFrequency: 0.34,
+      microNoise: 0.6,
+      arcAmplitude: 6,
+      offsetX: -45,
+      offsetYRatio: 0.55,
+    },
+  },
+
   // ইরেজার (Eraser) অ্যানিমেশন সেটিংস
   eraser: {
     // মোছার গতি (Erasing Speed)
@@ -150,6 +175,7 @@ export const TYPING_SPEED = {
   paragraph: ANIMATION_CONFIG.paragraph.speed,
   underline: ANIMATION_CONFIG.underline.speed,
   image: ANIMATION_CONFIG.image.speed,
+  table: ANIMATION_CONFIG.table.speed,
 };
 
 // পুরোনো renderer/math utils compatibility রাখার জন্য এই object রাখা হয়েছে।
