@@ -7,6 +7,14 @@ export const FPS      = 60;
 export const CANVAS_W = 1920;
 export const CANVAS_H = 1080;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// RECORDING কনফিগারেশন
+// true  → play বাটনে ক্লিক করলে আগের মতোই স্ক্রিন রেকর্ডিং শুরু হবে (ডিফল্ট)।
+// false → play বাটনে ক্লিক করলে রেকর্ডিং চাইবে না, সরাসরি অ্যানিমেশন চলবে।
+// দরকার হলে এখানে false করে run করা যাবে।
+// ─────────────────────────────────────────────────────────────────────────────
+export const RECORDING = true;
+
 // Minimum slot length (seconds) — every element gets at least this much time
 // even if its animation finishes faster (gives the viewer a moment to read).
 export const BASE_SEQ_DURATION = 3.0;
