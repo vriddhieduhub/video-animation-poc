@@ -18,6 +18,7 @@
 │       │   ├── frameExporter.js
 │       │   └── mathUtils.js
 │       ├── main.jsx
+│       ├── remotion
 │       ├── renderers
 │       │   ├── EraserRenderer.jsx
 │       │   ├── HeadingRenderer.jsx
@@ -88,6 +89,7 @@
   useCallback,
   useMemo,
 } from 'react';
+import RecordRTC from 'recordrtc';
 
 import { parseConfig, applyAudioDurations } from './engine/configParser.js';
 import { AudioManager }  from './engine/audioManager.js';
@@ -110,6 +112,10 @@ export default function App() {
   // Falls back to an empty scene on load error.
   const [configHtml,  setConfigHtml]  = useState('');
   const [configReady, setConfigReady] = useState(false);
+
+  // RecordRTC কে ট্র্যাক করার জন্য একটি রেফ
+ const recorderRef = useRef(null);
+  const streamRef   = useRef(null);
 
   useEffect(() => {
     fetch('/config/scene.html')
@@ -222,19 +228,67 @@ export default function App() {
   // ─────────────────────────────────────────────────────────────────────────
   // PREVIEW PLAYBACK
   // ─────────────────────────────────────────────────────────────────────────
-  const stopPreview = useCallback(() => {
+  // const stopPreview = useCallback(() => {
+  //   if (rafRef.current) {
+  //     cancelAnimationFrame(rafRef.current);
+  //     rafRef.current = null;
+  //   }
+  //   lastTsRef.current = null;
+  //   setIsPlaying(false);
+  // }, []);
+
+
+  // ── 🎬 অ্যানিমেশন স্টপ এবং অটো-ডাউনলোড লজিক ──
+const stopPreview = useCallback(() => {
+    // ১. চলমান অ্যানিমেশন ফ্রেম বন্ধ করুন
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
     lastTsRef.current = null;
     setIsPlaying(false);
+
+    // ২. RecordRTC রেকর্ডিং স্টপ এবং অটো-ডাউনলোড লজিক
+    if (recorderRef.current) {
+      console.log("Stopping recorder and generating video file...");
+      
+      recorderRef.current.stopRecording(() => {
+        const blob = recorderRef.current.getBlob();
+        const url = URL.createObjectURL(blob);
+        
+        // ফাইলটি ব্রাউজারে অটোমেটিক ডাউনলোড করানোর জন্য লিঙ্ক তৈরি
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `whiteboard-video-${Date.now()}.webm`; // অডিওসহ .webm ফাইল নাম
+        a.click();
+        
+        // রেকর্ডার ও স্ট্রিম ক্লিনআপ (যাতে স্ক্রিন শেয়ারিং আইকন চলে যায়)
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current = null;
+        }
+        recorderRef.current.destroy();
+        recorderRef.current = null;
+      });
+    }
+
+    if (audioManagerRef.current) {
+      audioManagerRef.current.reset();
+    }
   }, []);
 
-  const startPreview = useCallback(() => {
+
+
+
+
+
+
+
+
+
+const startPreview = useCallback(() => {
     if (isExportingRef.current || !scenesRef.current.length) return;
 
-    // Use ref values — these are always current even after async audio preload updates
     if (currentTimeRef.current >= totalDurationRef.current) {
       currentTimeRef.current = 0;
       setCurrentTime(0);
@@ -249,7 +303,6 @@ export default function App() {
       const delta = (ts - lastTsRef.current) / 1000;
       lastTsRef.current = ts;
 
-      // Always read totalDuration from ref — never from closure
       const dur     = totalDurationRef.current;
       const newTime = Math.min(currentTimeRef.current + delta, dur);
       currentTimeRef.current = newTime;
@@ -259,19 +312,82 @@ export default function App() {
       if (newTime < dur) {
         rafRef.current = requestAnimationFrame(frame);
       } else {
-        setIsPlaying(false);
-        rafRef.current = null;
+        // 🎯 ফিক্স: টাইমলাইন শেষ হওয়া মাত্রই সরাসরি stopPreview() কল হবে, 
+        // যা অটোমেটিক রেকর্ডার স্টপ করে ডাউনলোড প্রম্পট নিয়ে আসবে।
+        stopPreview();
       }
     }
 
     rafRef.current = requestAnimationFrame(frame);
-  // No deps on scenes/totalDuration — reads from refs inside frame()
-  }, []);
+  }, [stopPreview]); // dependency তে stopPreview অবশ্যই যুক্ত থাকবে
 
-  const handleTogglePlay = useCallback(() => {
-    if (isPlaying) stopPreview();
-    else           startPreview();
-  }, [isPlaying, startPreview, stopPreview]);
+
+
+
+  // const handleTogglePlay = useCallback(() => {
+  //   if (isPlaying) stopPreview();
+  //   else           startPreview();
+  // }, [isPlaying, startPreview, stopPreview]);
+
+
+
+
+// ── 🎬 HIGH-QUALITY AUDIO + VIDEO RECORDING LOGIC ──
+  const handleTogglePlay = useCallback(async () => {
+    if (isPlaying) {
+      stopPreview();
+    } else {
+      try {
+        // ১. ব্রাউজার স্ক্রিন ক্যাপচার কনফিগারেশন (ভিডিওর কোয়ালিটি এখানে লক করা হচ্ছে)
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            width: { ideal: 1920 },    // ফুল এইচডি (1080p) লক করা হলো, আপনার স্ক্রিন 4K হলে 3840 দিতে পারেন
+            height: { ideal: 1080 },
+            frameRate: { ideal: 60 },  // ৩০ FPS থেকে বাড়িয়ে ৬০ FPS করা হলো যাতে স্মুথ হয়
+            displaySurface: "browser"  // ব্রাউজারকে ট্যাব রেকর্ডিংয়ে প্রায়োরিটি দিতে বাধ্য করা
+          },
+          audio: {
+            echoCancellation: false,   // অডিওর কোয়ালিটি অরজিনাল রাখার জন্য ফিল্টার অফ
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 2            // স্টেরিও সাউন্ডের জন্য
+          },
+          preferCurrentTab: true, 
+          selfBrowserSurface: "include"
+        });
+
+        streamRef.current = stream;
+
+        // ২. RecordRTC কনফিগারেশন (বিটরেট এবং কম্প্রেশন কন্ট্রোল)
+        recorderRef.current = new RecordRTC(stream, {
+          type: 'video',
+          mimeType: 'video/webm;codecs=vp9,opus', // VP9 কোডেক অনেক বেশি শার্প এবং হাই-কোয়ালিটি দেয়
+          
+          // 🔥 বিটরেট বাড়িয়ে দেওয়া হলো (প্রায় ৫০ Mbps), যা ভিডিওর ঝাপসা ভাব বা পিক্সেল ভেঙে যাওয়া একদম বন্ধ করবে
+          bitsPerSecond: 50000000, 
+          
+          frameInterval: 16, // ৬০ FPS-এর জন্য ফ্রেম ইন্টারভাল (1000ms / 60)
+          videoBitsPerSecond: 50000000
+        });
+
+        // রেকর্ডিং শুরু
+        recorderRef.current.startRecording();
+
+        // অ্যানিমেশন প্লেব্যাক স্টার্ট
+        startPreview();
+
+        stream.getVideoTracks()[0].onended = () => {
+          stopPreview();
+        };
+
+      } catch (error) {
+        console.error("Recording prompt failed or cancelled:", error);
+        alert("Recording start করার জন্য স্ক্রিন/ট্যাব শেয়ার পারমিশন প্রয়োজন।");
+      }
+    }
+  }, [isPlaying, stopPreview, startPreview]);
+  
+
 
   const handleReset = useCallback(() => {
     stopPreview();
@@ -935,13 +1051,11 @@ export default function FloatingControls({
         display:      'flex',
         alignItems:   'center',
         gap:          '4px',
-        background:   'rgba(8, 8, 20, 0.54)',
-        backdropFilter: 'blur(10px)',
+        background:   'transparent',
         border:       '1px solid rgba(255,255,255,0.07)',
         borderRadius: '22px',
         padding:      '4px 8px',
         userSelect:   'none',
-        boxShadow:    '0 3px 14px rgba(0,0,0,0.34)',
         opacity:      0.72,
         transition:   'opacity 0.2s',
       }}
@@ -949,14 +1063,14 @@ export default function FloatingControls({
       onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.82')}
     >
       {/* ── Reset ── */}
-      <IconBtn
+      {/* <IconBtn
         onClick={onReset}
         disabled={isExporting}
         title="Reset to frame 0  (R)"
         color="#6366f1"
       >
         ⏮
-      </IconBtn>
+      </IconBtn> */}
 
       {/* ── Play / Pause ── */}
       <IconBtn
@@ -964,13 +1078,13 @@ export default function FloatingControls({
         disabled={isExporting}
         title={isPlaying ? 'Pause  (Space)' : 'Play Preview  (Space)'}
         color={isPlaying ? '#ef4444' : '#22c55e'}
-        large
+        small
       >
         {isPlaying ? '⏸' : '▶'}
       </IconBtn>
 
       {/* ── Seek bar ── */}
-      <div
+      {/* <div
         onClick={handleSeekClick}
         title="Seek — click anywhere"
         style={{
@@ -993,10 +1107,10 @@ export default function FloatingControls({
             transition: 'none',
           }}
         />
-      </div>
+      </div> */}
 
       {/* ── Time readout ── */}
-      <span
+      {/* <span
         style={{
           fontSize:   '9px',
           color:      isExporting ? '#f59e0b' : 'rgba(255,255,255,0.55)',
@@ -1010,13 +1124,13 @@ export default function FloatingControls({
         {isExporting
           ? `${exportProgress}%`
           : `${fmt(currentTime)} / ${fmt(totalDuration)}`}
-      </span>
+      </span> */}
 
       {/* ── Divider ── */}
       <div style={{ width: '1px', height: '12px', background: 'rgba(255,255,255,0.1)' }} />
 
       {/* ── Export / Cancel ── */}
-      {isExporting ? (
+      {/* {isExporting ? (
         <IconBtn
           onClick={onCancelExport}
           title="Cancel export"
@@ -1033,7 +1147,7 @@ export default function FloatingControls({
         >
           📁
         </IconBtn>
-      )}
+      )} */}
     </div>
   );
 }
@@ -1061,6 +1175,7 @@ function IconBtn({ children, onClick, disabled, title, color, large }) {
         justifyContent: 'center',
         padding:      0,
         flexShrink:   0,
+        opacity:     0.4,
         transition:   'background 0.15s, transform 0.1s',
       }}
       onMouseEnter={(e) => {
@@ -1850,7 +1965,7 @@ function computeAnimDuration(type, content, rawClasses) {
     case 'image':
       return TYPING_SPEED.image.fixedDuration;
     case 'eraser':
-      return ANIMATION_CONFIG.eraser.speed.durationInFrames / FPS;
+      return ANIMATION_CONFIG.eraser.speed.totalDurationFrames / FPS;
     default:
       return 0.5; // dividers are near-instant
   }
@@ -2063,73 +2178,131 @@ export const BASE_SEQ_DURATION = 3.0;
 // renderer ঘেঁটে খুঁজতে না হয়।
 // ─────────────────────────────────────────────────────────────────────────────
 export const ANIMATION_CONFIG = {
+  // শিরোনাম (Heading) অ্যানিমেশন সেটিংস
   heading: {
+    // লেখার গতি (Typing Speed)
     speed: {
+      // প্রতি অক্ষরে ফ্রেম সংখ্যা (কত ফ্রেম ধরে একটি অক্ষর লেখা হবে)।
+      // এই মান কমালে লেখা দ্রুত হবে, বাড়ালে ধীর হবে।
       framesPerCharacter: 10,
+      // সর্বনিম্ন সময়কাল (সেকেন্ডে)। একটি শিরোনামের অ্যানিমেশন অন্তত এই সময় ধরে চলবে।
       minDuration: 2.8,
+      // সর্বোচ্চ সময়কাল (সেকেন্ডে)। একটি শিরোনামের অ্যানিমেশন এই সময়ের বেশি চলবে না।
       maxDuration: 10.0,
     },
+    // হাতের নড়াচড়া (Hand Movement)
     hand: {
+      // হাতের ঢেউয়ের বিস্তার (হাত কতটা উপরে-নিচে নড়বে)।
       waveAmplitude: 9,
+      // হাতের ঢেউয়ের ফ্রিকোয়েন্সি (হাত কত দ্রুত উপরে-নিচে নড়বে)।
       waveFrequency: 0.32,
+      // হাতের সামান্য এলোমেলো নড়াচড়া (ক্ষুদ্র নয়েজ)।
       microNoise: 0.45,
+      // হাতের X-অক্ষের অফসেট (বাম বা ডানে সরাতে)।
       offsetX: -20,
+      // হাতের Y-অক্ষের অফসেট অনুপাত (উপরে বা নিচে সরাতে, লেখার উচ্চতার সাপেক্ষে)।
       offsetYRatio: 0.5,
     },
   },
+
+  // অনুচ্ছেদ (Paragraph) অ্যানিমেশন সেটিংস
   paragraph: {
+    // লেখার গতি (Typing Speed)
     speed: {
+      // প্রতি অক্ষরে ফ্রেম সংখ্যা।
       framesPerCharacter: 6,
+      // সর্বনিম্ন সময়কাল (সেকেন্ডে)।
       minDuration: 4.0,
+      // সর্বোচ্চ সময়কাল (সেকেন্ডে)।
       maxDuration: 18.0,
     },
+    // হাতের নড়াচড়া (Hand Movement)
     hand: {
-      // paragraph e haat jeno straight line e na jay, tai ekhane wave/arc beshi rakha holo
+      // হাতের ঢেউয়ের বিস্তার।
       waveAmplitude: 10,
+      // হাতের ঢেউয়ের ফ্রিকোয়েন্সি।
       waveFrequency: 0.38,
+      // হাতের সামান্য এলোমেলো নড়াচড়া।
       microNoise: 0.9,
+      // হাতের বাঁকানো নড়াচড়ার বিস্তার (অনুচ্ছেদের জন্য বেশি)।
       arcAmplitude: 7,
+      // হাতের X-অক্ষের অফসেট।
       offsetX: -30,
+      // হাতের Y-অক্ষের অফসেট অনুপাত।
       offsetYRatio: 0.75,
     },
   },
+
+  // আন্ডারলাইন (Underline) অ্যানিমেশন সেটিংস
   underline: {
+    // আঁকার গতি (Drawing Speed)
     speed: {
+      // প্রতি ফ্রেমে পিক্সেল সংখ্যা (আন্ডারলাইন কত পিক্সেল আঁকা হবে প্রতি ফ্রেমে)।
       pxPerFrame: 5,
+      // সর্বনিম্ন সময়কাল (সেকেন্ডে)।
       minDuration: 2.0,
+      // সর্বোচ্চ সময়কাল (সেকেন্ডে)।
       maxDuration: 6.0,
     },
+    // হাতের নড়াচড়া (Hand Movement)
     hand: {
+      // হাতের ঢেউয়ের বিস্তার।
       waveAmplitude: 8,
-      waveFrequency: 1.2,
+      // হাতের ঢেউয়ের ফ্রিকোয়েন্সি।
+      waveFrequency: 1.0,
+      // হাতের সামান্য এলোমেলো নড়াচড়া।
       microNoise: 1.2,
+      // হাতের X-অক্ষের অফসেট।
       offsetX: 15,
+      // হাতের Y-অক্ষের অফসেট।
       offsetY: -10,
     },
   },
+
+  // ছবি (Image) অ্যানিমেশন সেটিংস
   image: {
+    // প্রদর্শনের গতি (Display Speed)
     speed: {
+      // ছবির জন্য নির্দিষ্ট সময়কাল (সেকেন্ডে)।
       fixedDuration: 3.8,
     },
+    // হাতের নড়াচড়া (Hand Movement)
     hand: {
+      // হাতের ঢেউয়ের বিস্তার।
       waveAmplitude: 16,
+      // হাতের ঢেউয়ের ফ্রিকোয়েন্সি।
       waveFrequency: 0.8,
+      // হাতের সামান্য এলোমেলো নড়াচড়া।
       microNoise: 1.5,
+      // হাতের X-অক্ষের অফসেট।
       offsetX: -25,
+      // হাতের Y-অক্ষের অফসেট।
       offsetY: 15,
     },
   },
+
+  // ইরেজার (Eraser) অ্যানিমেশন সেটিংস
   eraser: {
+    // মোছার গতি (Erasing Speed)
     speed: {
-      durationInFrames: 90,
-      speedMultiplier: 0.6,
+      // ইরেজার অ্যানিমেশনের মোট সময়কাল (ফ্রেমে)। এই মান কমালে মোছা দ্রুত হবে, বাড়ালে ধীর হবে।
+      totalDurationFrames: 150,
+      // ইরেজারের দৃশ্যমান গতির গুণক। এই মান কমালে ইরেজার ধীরে নড়বে, বাড়ালে দ্রুত নড়বে।
+      // এটি মোছার মোট সময়কালকে প্রভাবিত করে না, শুধু মোছার দৃশ্যমান গতিকে প্রভাবিত করে।
+      visualSpeedMultiplier: 0.7,
+      // হাতের মোছার গতির গুণক (হাত কত দ্রুত মোছার কাজ করবে)।
       handSweepSpeed: 0.7,
+      // হাতের মোছার সময় ঢেউয়ের বিস্তার অনুপাত।
       handAmplitudeRatio: 0.5,
     },
+    // হাতের নড়াচড়া (Hand Movement)
     hand: {
-      scrubFrequency: 1.6,
-      scrubAmplitude: 220,
-      microNoise: 3,
+      // হাতের মোছার ফ্রিকোয়েন্সি (হাত কত দ্রুত ডানে-বামে নড়বে মোছার সময়)।
+      scrubFrequency: 0.5,
+      // হাতের মোছার বিস্তার (হাত কত পিক্সেল ডানে-বামে নড়বে মোছার সময়)।
+      scrubAmplitude: 90,
+      // হাতের সামান্য এলোমেলো নড়াচড়া।
+      microNoise: 1,
     },
   },
 };
@@ -2178,24 +2351,8 @@ export const NIB_OFFSET = {
 
   \client\src\engine\frameExporter.js  
 ########################################################
-        // ─────────────────────────────────────────────────────────────────────────────
-// FRAME EXPORTER
+        // ── 🎯 FULLY FIXED FRAME EXPORTER ENGINE ─────────────────────────────────────
 // Deterministic, memory-safe, hardware-streaming frame export engine.
-//
-// Strategy
-// ────────
-//  • Caller sets React state for each frame via setCurrentTime().
-//  • We yield 2ms after each setState to let React repaint.
-//  • We serialize the live DOM of the master canvas element using
-//    XMLSerializer → SVG foreignObject → data URI → OffscreenCanvas → JPEG blob.
-//  • Each blob is immediately streamed to disk via the File System Access API.
-//  • Blob is released from scope immediately after write → GC-eligible.
-//  • RAM stays flat regardless of total frame count.
-//
-// Audio synchronization manifest
-// ───────────────────────────────
-//  • buildAudioManifest() returns a JSON file describing every audio cue
-//    (filename + offset in seconds) so the user can cross-check with FFmpeg.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { FPS, CANVAS_W, CANVAS_H } from './constants.js';
@@ -2208,15 +2365,9 @@ export function padNum(n, digits) {
 
 /**
  * Recursively copy computed styles from a live DOM node into a cloned node.
- * We copy a focused property set rather than the entire 300+ property CSSStyleDeclaration
- * to keep the SVG payload small and avoid browser quirks.
- *
- * @param {Element} source
- * @param {Element} target
  */
 function inlineComputedStyles(source, target) {
   if (source.nodeType !== 1) return;
-
   const computed = window.getComputedStyle(source);
   const PROPS = [
     'display', 'position', 'top', 'left', 'right', 'bottom',
@@ -2231,12 +2382,12 @@ function inlineComputedStyles(source, target) {
     'line-height', 'letter-spacing', 'text-align', 'text-decoration',
     'white-space', 'word-break', 'overflow-wrap',
     'transform', 'transform-origin',
-    'flex-direction', 'align-items', 'justify-content', 'flex-wrap', 'flex',
+    'flex-direction', 'align-items', 'justify-content', 
+    'flex-wrap', 'flex',
     'overflow', 'z-index', 'box-sizing',
     'clip-path', 'object-fit',
     'vertical-align',
   ];
-
   let styleStr = '';
   PROPS.forEach((p) => {
     const val = computed.getPropertyValue(p);
@@ -2244,10 +2395,8 @@ function inlineComputedStyles(source, target) {
       styleStr += `${p}:${val};`;
     }
   });
-
   // Append inline style on top so position overrides win
   target.setAttribute('style', styleStr + (target.getAttribute('style') || ''));
-
   const srcChildren = source.children;
   const tgtChildren = target.children;
   for (let i = 0; i < srcChildren.length; i++) {
@@ -2260,33 +2409,49 @@ function inlineComputedStyles(source, target) {
 /**
  * Serialize the live 1920×1080 canvas DOM element to a data URI
  * via SVG foreignObject.
- *
- * @param {HTMLElement} element - the #master-canvas div
- * @returns {string} data URI
  */
 function domToSvgDataUri(element) {
+  // ১. ক্যানভাস ক্লোন করা
   const clone = element.cloneNode(true);
 
-  // Remove hand cursor images during export (they are part of animation state
-  // that may be mid-frame; cleaner to exclude from frames where rawProgress=1)
-  clone.querySelectorAll('img[alt=""]').forEach((img) => {
-    if (
-      img.src.includes('finaHandImg') ||
-      img.src.includes('finalHandImgArt') ||
-      img.src.includes('finalHandGrip')
-    ) {
-      img.remove();
-    }
-  });
+  // ❌ [FIXED] হাত ডিলিট করার কোডটি সম্পূর্ণ রিমুভ করা হলো! 
+  // এখন finaHandImg, finalHandImgArt, finalHandGrip সব ইমেজে থেকে যাবে।
 
+  // ২. ইনলাইন স্টাইল অ্যাপ্লাই করা
   inlineComputedStyles(element, clone);
+
+  // ৩. [FIXED] ক্যানভাস এরিয়া ১৯২০x১০৮০ পিক্সেল সাইজে স্ট্রিক্ট লক করা
+  clone.style.width = `${CANVAS_W}px`;
+  clone.style.height = `${CANVAS_H}px`;
+  clone.style.overflow = 'hidden';
+  clone.style.position = 'absolute';
+  clone.style.top = '0px';
+  clone.style.left = '0px';
+
+  // ৪. [FIXED] master.css এর সমস্ত ক্লাস রুলস সরাসরি রিড করে এক্সপোর্টে ইনজেক্ট করা
+  const styleSheets = Array.from(document.styleSheets);
+  let cssRulesStr = '';
+  try {
+    styleSheets.forEach(sheet => {
+      // master.css অথবা লোকাল স্টাইলশীট থেকে রুলস রিড করা
+      if (!sheet.href || sheet.href.includes('master.css') || sheet.href.includes('localhost')) {
+        Array.from(sheet.cssRules || []).forEach(rule => {
+          cssRulesStr += rule.cssText + '\n';
+        });
+      }
+    });
+  } catch (e) {
+    console.warn('[FrameExporter] CSS Injection warning:', e.message);
+  }
 
   const serializer = new XMLSerializer();
   const domStr     = serializer.serializeToString(clone);
 
+  // ৫. [FIXED] SVG viewBox লক করা যাতে এক্সপোর্ট এরিয়া পারফেক্ট থাকে
   const svgStr = [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS_W}" height="${CANVAS_H}">`,
-    `<foreignObject width="100%" height="100%">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS_W}" height="${CANVAS_H}" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}">`,
+    `<style>${cssRulesStr}</style>`, 
+    `<foreignObject width="${CANVAS_W}" height="${CANVAS_H}" x="0" y="0">`,
     domStr,
     `</foreignObject>`,
     `</svg>`,
@@ -2297,9 +2462,6 @@ function domToSvgDataUri(element) {
 
 /**
  * Paint a data URI into an offscreen 1920×1080 canvas and return a JPEG blob.
- *
- * @param {string} dataUri
- * @returns {Promise<Blob>}
  */
 function renderToJpegBlob(dataUri) {
   return new Promise((resolve, reject) => {
@@ -2310,48 +2472,27 @@ function renderToJpegBlob(dataUri) {
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
       ctx.drawImage(img, 0, 0, CANVAS_W, CANVAS_H);
-      oc.convertToBlob({ type: 'image/jpeg', quality: 0.92 })
+      oc.convertToBlob({ type: 'image/jpeg', quality: 0.95 }) // কায়ালিটি সামান্য উন্নত (95%) করা হলো
         .then(resolve)
         .catch(reject);
     };
-    img.onerror  = () => reject(new Error('SVG image load failed'));
+    img.onerror  = () => reject(new Error('SVG image load failed. If custom images are used, ensure they are served locally with proper CORS headers.'));
     img.src      = dataUri;
   });
 }
 
 /**
  * Write a Blob to a named file inside a directory handle.
- *
- * @param {FileSystemDirectoryHandle} dirHandle
- * @param {string}                   fileName
- * @param {Blob}                     blob
  */
 async function writeBlobToDir(dirHandle, fileName, blob) {
   const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
   const writable   = await fileHandle.createWritable();
   await writable.write(blob);
   await writable.close();
-  // writable and blob fall out of scope here → GC-eligible
 }
 
 // ── Audio Manifest Builder ───────────────────────────────────────────────────
 
-/**
- * Build a JSON manifest of all audio cues with their absolute timestamps.
- * Writes audio_manifest.json to the export directory.
- *
- * Format:
- * {
- *   "fps": 60,
- *   "cues": [
- *     { "frame": 120, "timeSeconds": 2.0, "src": "/audio/scene_01_seq_01.mp3" },
- *     ...
- *   ]
- * }
- *
- * @param {import('./configParser.js').Scene[]} scenes
- * @param {FileSystemDirectoryHandle}           dirHandle
- */
 export async function writeAudioManifest(scenes, dirHandle) {
   const cues = [];
   let cursor = 0;
@@ -2370,7 +2511,6 @@ export async function writeAudioManifest(scenes, dirHandle) {
       cursor += el.slotDuration;
     });
   });
-
   const manifest = JSON.stringify({ fps: FPS, cues }, null, 2);
   const blob     = new Blob([manifest], { type: 'application/json' });
   await writeBlobToDir(dirHandle, 'audio_manifest.json', blob);
@@ -2378,22 +2518,6 @@ export async function writeAudioManifest(scenes, dirHandle) {
 
 // ── Main Export Loop ─────────────────────────────────────────────────────────
 
-/**
- * Run the deterministic frame export loop.
- *
- * @param {{
- *   dirHandle:       FileSystemDirectoryHandle,
- *   canvasEl:        HTMLElement,
- *   totalDuration:   number,
- *   scenes:          import('./configParser.js').Scene[],
- *   setCurrentTime:  (t: number) => void,
- *   onProgress:      (pct: number, frame: number, total: number) => void,
- *   onLog:           (msg: string) => void,
- *   cancelRef:       React.MutableRefObject<boolean>,
- * }} options
- *
- * @returns {Promise<{ framesWritten: number, errors: number }>}
- */
 export async function runExport({
   dirHandle,
   canvasEl,
@@ -2410,10 +2534,9 @@ export async function runExport({
 
   onLog(`▶ Export started — ${totalFrames} frames @ ${FPS}fps`);
   onLog(`  Output: ${dirHandle.name}/`);
-  onLog(`  Resolution: ${CANVAS_W}×${CANVAS_H}  JPEG 92%`);
+  onLog(`  Resolution: ${CANVAS_W}×${CANVAS_H}  JPEG 95%`);
   onLog('─'.repeat(50));
 
-  // Write audio manifest up-front
   try {
     await writeAudioManifest(scenes, dirHandle);
     onLog('  ✓ audio_manifest.json written');
@@ -2421,8 +2544,8 @@ export async function runExport({
     onLog(`  ⚠ Could not write audio manifest: ${e.message}`);
   }
 
-  // Yield to browser every BATCH_SIZE frames to keep UI responsive
-  const BATCH_SIZE = 4;
+  // [SPEED BOOST] ব্রাউজার যেন দ্রুত রেন্ডার করতে পারে, তাই ব্যাচ সাইজ ৪ থেকে বাড়িয়ে ১৬ করা হলো
+  const BATCH_SIZE = 16; 
 
   return new Promise((resolve) => {
     async function processBatch() {
@@ -2436,14 +2559,11 @@ export async function runExport({
         }
 
         const t = frameIndex / FPS;
-
-        // 1. Force deterministic time
         setCurrentTime(t);
 
-        // 2. Yield so React repaints
+        // React repaints এর জন্য সামান্য বিরতি
         await new Promise((r) => setTimeout(r, 2));
 
-        // 3. Serialize DOM → SVG data URI
         let dataUri;
         try {
           dataUri = domToSvgDataUri(canvasEl);
@@ -2454,7 +2574,6 @@ export async function runExport({
           continue;
         }
 
-        // 4. Render to JPEG blob
         let blob;
         try {
           blob = await renderToJpegBlob(dataUri);
@@ -2465,7 +2584,6 @@ export async function runExport({
           continue;
         }
 
-        // 5. Write to disk
         const fileName = `frame_${padNum(frameIndex + 1, 5)}.jpg`;
         try {
           await writeBlobToDir(dirHandle, fileName, blob);
@@ -2476,7 +2594,6 @@ export async function runExport({
           continue;
         }
 
-        // 6. Progress update every 60 frames
         const pct = Math.round(((frameIndex + 1) / totalFrames) * 100);
         onProgress(pct, frameIndex + 1, totalFrames);
         if ((frameIndex + 1) % 60 === 0 || frameIndex === totalFrames - 1) {
@@ -2490,17 +2607,15 @@ export async function runExport({
       }
 
       if (frameIndex < totalFrames) {
-        // Schedule next batch
         setTimeout(processBatch, 0);
       } else {
-        // Done
         onLog('─'.repeat(50));
         onLog(
           errorCount > 0
             ? `⚠ Done with ${errorCount} error(s). Check log above.`
             : `✅ Export complete — ${totalFrames} frames written.`
         );
-        onLog(`  Next: run FFmpeg command shown below.`);
+        onLog(`  Next: run FFmpeg command to combine frames.`);
         resolve({ framesWritten: frameIndex, errors: errorCount });
       }
     }
@@ -2508,7 +2623,6 @@ export async function runExport({
     processBatch();
   });
 }
-
 ########################################################
 
   \client\src\engine\mathUtils.js  
@@ -4074,9 +4188,10 @@ u {
     "list-voices:en": "node server/list-voices.js en-US"
   },
   "dependencies": {
-    "edge-tts-node": "^2.0.11",
+    "edge-tts-node": "^1.1.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "recordrtc": "^5.6.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",

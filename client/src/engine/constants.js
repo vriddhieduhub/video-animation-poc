@@ -16,73 +16,156 @@ export const BASE_SEQ_DURATION = 3.0;
 // renderer ঘেঁটে খুঁজতে না হয়।
 // ─────────────────────────────────────────────────────────────────────────────
 export const ANIMATION_CONFIG = {
+  // শিরোনাম (Heading) অ্যানিমেশন সেটিংস
   heading: {
+    // লেখার গতি (Typing Speed)
     speed: {
+      // প্রতি অক্ষরে ফ্রেম সংখ্যা (কত ফ্রেম ধরে একটি অক্ষর লেখা হবে)।
+      // এই মান কমালে লেখা দ্রুত হবে, বাড়ালে ধীর হবে।
       framesPerCharacter: 10,
+      // সর্বনিম্ন সময়কাল (সেকেন্ডে)। একটি শিরোনামের অ্যানিমেশন অন্তত এই সময় ধরে চলবে।
       minDuration: 2.8,
+      // সর্বোচ্চ সময়কাল (সেকেন্ডে)। একটি শিরোনামের অ্যানিমেশন এই সময়ের বেশি চলবে না।
       maxDuration: 10.0,
     },
+    // হাতের নড়াচড়া (Hand Movement)
     hand: {
+      // হাতের ঢেউয়ের বিস্তার (হাত কতটা উপরে-নিচে নড়বে)।
       waveAmplitude: 9,
+      // হাতের ঢেউয়ের ফ্রিকোয়েন্সি (হাত কত দ্রুত উপরে-নিচে নড়বে)।
       waveFrequency: 0.32,
+      // হাতের সামান্য এলোমেলো নড়াচড়া (ক্ষুদ্র নয়েজ)।
       microNoise: 0.45,
+      // হাতের X-অক্ষের অফসেট (বাম বা ডানে সরাতে)।
       offsetX: -20,
+      // হাতের Y-অক্ষের অফসেট অনুপাত (উপরে বা নিচে সরাতে, লেখার উচ্চতার সাপেক্ষে)।
       offsetYRatio: 0.5,
     },
   },
+
+  // অনুচ্ছেদ (Paragraph) অ্যানিমেশন সেটিংস
   paragraph: {
+    // লেখার গতি (Typing Speed)
     speed: {
+      // প্রতি অক্ষরে ফ্রেম সংখ্যা।
       framesPerCharacter: 6,
+      // সর্বনিম্ন সময়কাল (সেকেন্ডে)।
       minDuration: 4.0,
+      // সর্বোচ্চ সময়কাল (সেকেন্ডে)।
       maxDuration: 18.0,
     },
+    // হাতের নড়াচড়া (Hand Movement)
     hand: {
-      // paragraph e haat jeno straight line e na jay, tai ekhane wave/arc beshi rakha holo
+      // হাতের ঢেউয়ের বিস্তার।
       waveAmplitude: 10,
+      // হাতের ঢেউয়ের ফ্রিকোয়েন্সি।
       waveFrequency: 0.38,
+      // হাতের সামান্য এলোমেলো নড়াচড়া।
       microNoise: 0.9,
+      // হাতের বাঁকানো নড়াচড়ার বিস্তার (অনুচ্ছেদের জন্য বেশি)।
       arcAmplitude: 7,
+      // হাতের X-অক্ষের অফসেট।
       offsetX: -30,
+      // হাতের Y-অক্ষের অফসেট অনুপাত।
       offsetYRatio: 0.75,
     },
   },
+
+  // আন্ডারলাইন (Underline) অ্যানিমেশন সেটিংস
   underline: {
+    // আঁকার গতি (Drawing Speed)
     speed: {
+      // প্রতি ফ্রেমে পিক্সেল সংখ্যা (আন্ডারলাইন কত পিক্সেল আঁকা হবে প্রতি ফ্রেমে)।
       pxPerFrame: 5,
+      // সর্বনিম্ন সময়কাল (সেকেন্ডে)।
       minDuration: 2.0,
+      // সর্বোচ্চ সময়কাল (সেকেন্ডে)।
       maxDuration: 6.0,
     },
+    // হাতের নড়াচড়া (Hand Movement)
     hand: {
+      // হাতের ঢেউয়ের বিস্তার।
       waveAmplitude: 8,
-      waveFrequency: 1.2,
+      // হাতের ঢেউয়ের ফ্রিকোয়েন্সি।
+      waveFrequency: 1.0,
+      // হাতের সামান্য এলোমেলো নড়াচড়া।
       microNoise: 1.2,
+      // হাতের X-অক্ষের অফসেট।
       offsetX: 15,
+      // হাতের Y-অক্ষের অফসেট।
       offsetY: -10,
     },
   },
+
+  // ছবি (Image) অ্যানিমেশন সেটিংস
   image: {
+    // প্রদর্শনের গতি (Display Speed)
     speed: {
+      // ছবির জন্য নির্দিষ্ট সময়কাল (সেকেন্ডে)।
       fixedDuration: 3.8,
     },
+    // হাতের নড়াচড়া (Hand Movement)
     hand: {
+      // হাতের ঢেউয়ের বিস্তার।
       waveAmplitude: 16,
+      // হাতের ঢেউয়ের ফ্রিকোয়েন্সি।
       waveFrequency: 0.8,
+      // হাতের সামান্য এলোমেলো নড়াচড়া।
       microNoise: 1.5,
+      // হাতের X-অক্ষের অফসেট।
       offsetX: -25,
+      // হাতের Y-অক্ষের অফসেট।
       offsetY: 15,
     },
   },
-  eraser: {
+
+  // টেবিল (Table) অ্যানিমেশন সেটিংস — সারি ধরে ধরে (row by row) হাতে লেখার মতো
+  table: {
+    // লেখার গতি (Writing Speed)
     speed: {
-      durationInFrames: 90,
-      speedMultiplier: 0.6,
+      // প্রতি অক্ষরের জন্য ফ্রেম সংখ্যা।
+      framesPerCharacter: 4,
+      // সর্বনিম্ন সময়কাল (সেকেন্ডে)।
+      minDuration: 5.0,
+      // সর্বোচ্চ সময়কাল (সেকেন্ডে)।
+      maxDuration: 32.0,
+      // মোট অ্যানিমেশনের যত অংশ শুধু খালি টেবিলের ছক/বর্ডার আঁকতে ব্যয় হবে
+      // (কন্টেন্ট লেখা শুরু হওয়ার আগে)।
+      gridDrawRatio: 0.12,
+    },
+    // হাতের নড়াচড়া (Hand Movement)
+    hand: {
+      waveAmplitude: 8,
+      waveFrequency: 0.34,
+      microNoise: 0.6,
+      arcAmplitude: 6,
+      offsetX: -45,
+      offsetYRatio: 0.55,
+    },
+  },
+
+  // ইরেজার (Eraser) অ্যানিমেশন সেটিংস
+  eraser: {
+    // মোছার গতি (Erasing Speed)
+    speed: {
+      // ইরেজার অ্যানিমেশনের মোট সময়কাল (ফ্রেমে)। এই মান কমালে মোছা দ্রুত হবে, বাড়ালে ধীর হবে।
+      totalDurationFrames: 150,
+      // ইরেজারের দৃশ্যমান গতির গুণক। এই মান কমালে ইরেজার ধীরে নড়বে, বাড়ালে দ্রুত নড়বে।
+      // এটি মোছার মোট সময়কালকে প্রভাবিত করে না, শুধু মোছার দৃশ্যমান গতিকে প্রভাবিত করে।
+      visualSpeedMultiplier: 0.7,
+      // হাতের মোছার গতির গুণক (হাত কত দ্রুত মোছার কাজ করবে)।
       handSweepSpeed: 0.7,
+      // হাতের মোছার সময় ঢেউয়ের বিস্তার অনুপাত।
       handAmplitudeRatio: 0.5,
     },
+    // হাতের নড়াচড়া (Hand Movement)
     hand: {
-      scrubFrequency: 1.6,
-      scrubAmplitude: 220,
-      microNoise: 3,
+      // হাতের মোছার ফ্রিকোয়েন্সি (হাত কত দ্রুত ডানে-বামে নড়বে মোছার সময়)।
+      scrubFrequency: 0.5,
+      // হাতের মোছার বিস্তার (হাত কত পিক্সেল ডানে-বামে নড়বে মোছার সময়)।
+      scrubAmplitude: 90,
+      // হাতের সামান্য এলোমেলো নড়াচড়া।
+      microNoise: 1,
     },
   },
 };
@@ -92,6 +175,7 @@ export const TYPING_SPEED = {
   paragraph: ANIMATION_CONFIG.paragraph.speed,
   underline: ANIMATION_CONFIG.underline.speed,
   image: ANIMATION_CONFIG.image.speed,
+  table: ANIMATION_CONFIG.table.speed,
 };
 
 // পুরোনো renderer/math utils compatibility রাখার জন্য এই object রাখা হয়েছে।

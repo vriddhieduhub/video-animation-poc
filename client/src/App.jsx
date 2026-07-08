@@ -8,137 +8,80 @@ import React, {
 
 import { parseConfig, applyAudioDurations } from './engine/configParser.js';
 import { AudioManager }  from './engine/audioManager.js';
-import { runExport }     from './engine/frameExporter.js';
-
 import MasterCanvas      from './components/MasterCanvas.jsx';
-import FloatingControls  from './components/FloatingControls.jsx';
-import ExportDoneModal   from './components/ExportDoneModal.jsx';
 
-// ── Import master.css ────────────────────────────────────────────────────────
+// ── নতুন কাস্টম হুক ইমপোর্ট ──────────────────────────────────────────────────
+import useScreenRecorder from './hooks/useScreenRecorder.js';
+
 import './styles/master.css';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// APP
-// ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
-
-  // ── Config loading ────────────────────────────────────────────────────────
-  // scene.html is loaded at runtime via fetch so users can edit it freely.
-  // Falls back to an empty scene on load error.
   const [configHtml,  setConfigHtml]  = useState('');
   const [configReady, setConfigReady] = useState(false);
 
+  // Scene html loading...
   useEffect(() => {
     fetch('/config/scene.html')
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.text();
-      })
-      .then((html) => {
-        setConfigHtml(html);
-        setConfigReady(true);
-      })
-      .catch((err) => {
-        console.warn('[App] Could not load /config/scene.html:', err.message);
-        setConfigHtml('<div data-sceneid="01"><p data-timelinesequenceid="01" class="absolute top-400 left-200 text-4xl font-kalam text-gray">Add your scene config to client/public/config/scene.html</p></div>');
+      .then((r) => (!r.ok ? Promise.reject(r) : r.text()))
+      .then((html) => { setConfigHtml(html); setConfigReady(true); })
+      .catch(() => {
+        setConfigHtml('<div data-sceneid="01"><p class="absolute top-400 left-200 text-4xl">Add scene config</p></div>');
         setConfigReady(true);
       });
   }, []);
 
-  // ── Scene graph ───────────────────────────────────────────────────────────
   const [parsedData, setParsedData] = useState({ scenes: [], totalDuration: 0 });
   const { scenes, totalDuration }   = parsedData;
 
-  // Refs so the RAF loop always reads the LATEST values — never stale closures
   const scenesRef       = useRef([]);
   const totalDurationRef = useRef(0);
-  useEffect(() => { scenesRef.current = scenes; },        [scenes]);
-  useEffect(() => { totalDurationRef.current = totalDuration; }, [totalDuration]);
+
+  useEffect(() => { 
+    scenesRef.current = scenes; 
+  },[scenes]);
+
+  useEffect(() => { 
+    totalDurationRef.current = totalDuration; 
+  }, [totalDuration]);
 
   useEffect(() => {
     if (!configReady || !configHtml) return;
-    const data = parseConfig(configHtml);
-    console.log('[App] parsed scenes:', data.scenes.map(s =>
-      `Scene${s.sceneId} elems=${s.elements.length} start=${s.startTime} end=${s.endTime}`
-    ));
-    console.log('[App] totalDuration:', data.totalDuration);
-    setParsedData(data);
+    setParsedData(parseConfig(configHtml));
   }, [configHtml, configReady]);
 
-  // ── Playback state ────────────────────────────────────────────────────────
-  const [currentTime,    setCurrentTime]    = useState(0);
-  const [isPlaying,      setIsPlaying]      = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [isPlaying,   setIsPlaying]   = useState(false);
 
-  // ── Export state ──────────────────────────────────────────────────────────
-  const [isExporting,    setIsExporting]    = useState(false);
-  const [exportProgress, setExportProgress] = useState(0);
-  const [exportLog,      setExportLog]      = useState([]);
-  // Modal shown on completion
-  const [exportResult,   setExportResult]   = useState(null);
-  // { folderName, framesWritten }
-
-  // ── Refs ──────────────────────────────────────────────────────────────────
   const rafRef           = useRef(null);
   const lastTsRef        = useRef(null);
   const currentTimeRef   = useRef(0);
   const canvasRef        = useRef(null);
   const audioManagerRef  = useRef(new AudioManager());
-  const cancelExportRef  = useRef(false);
-  const isExportingRef   = useRef(false);
 
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
 
-  // ── Audio preload when scene graph updates ────────────────────────────────
+  // Audio preloader...
   useEffect(() => {
     if (!scenes.length) return;
     const mgr = audioManagerRef.current;
     mgr.reset();
     mgr.preload(scenes).then((durations) => {
-      const anyChanged = scenes.some((s) =>
-        s.elements.some((el) => el.audioSrc && durations[el.audioSrc] > 0)
-      );
-      if (anyChanged) {
+      if (scenes.some((s) => s.elements.some((el) => el.audioSrc && durations[el.audioSrc] > 0))) {
         setParsedData(applyAudioDurations(scenes, durations));
       }
     });
   }, [scenes.length]);
 
-  // ── Active scene (derived) ────────────────────────────────────────────────
   const activeScene = useMemo(() => {
     if (!scenes.length) return null;
-    const found = scenes.find(
-      (s) => currentTime >= s.startTime && currentTime < s.endTime
-    );
-    if (found) return found;
-    if (currentTime >= totalDuration && totalDuration > 0) return scenes[scenes.length - 1];
-    return scenes[0];
-  }, [scenes, currentTime, totalDuration]);
-
-  // Log scene transitions
-  useEffect(() => {
-    if (activeScene) {
-      console.log(`[App] activeScene=${activeScene.sceneId} at t=${currentTime.toFixed(2)} (start=${activeScene.startTime} end=${activeScene.endTime})`);
-    }
-  }, [activeScene?.sceneId]);
-
-  // ── Audio file list (for FFmpeg command in modal) ─────────────────────────
-  const audioFiles = useMemo(() => {
-    const seen = new Set();
-    const list = [];
-    scenes.forEach((s) =>
-      s.elements.forEach((el) => {
-        if (el.audioSrc && !seen.has(el.audioSrc)) {
-          seen.add(el.audioSrc);
-          list.push(el.audioSrc);
-        }
-      })
-    );
-    return list;
-  }, [scenes]);
+    return scenes.find((s) => currentTime >= s.startTime && currentTime < s.endTime) || scenes[0];
+  }, [scenes, currentTime]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // PREVIEW PLAYBACK
+  // PREVIEW CONTROL ARCHITECTURE
   // ─────────────────────────────────────────────────────────────────────────
+  
+  // ১. পিওর অ্যানিমেশন স্টপ লজিক
   const stopPreview = useCallback(() => {
     if (rafRef.current) {
       cancelAnimationFrame(rafRef.current);
@@ -146,12 +89,20 @@ export default function App() {
     }
     lastTsRef.current = null;
     setIsPlaying(false);
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch((err) => console.log("Error exiting fullscreen:", err));
+    }
+
+    if (audioManagerRef.current) {
+      audioManagerRef.current.reset();
+    }
   }, []);
 
-  const startPreview = useCallback(() => {
-    if (isExportingRef.current || !scenesRef.current.length) return;
 
-    // Use ref values — these are always current even after async audio preload updates
+  // ২. পিওর অ্যানিমেশন স্টার্ট লজিক
+  const startPreview = useCallback(() => {
+    if (!scenesRef.current.length) return;
+
     if (currentTimeRef.current >= totalDurationRef.current) {
       currentTimeRef.current = 0;
       setCurrentTime(0);
@@ -166,7 +117,6 @@ export default function App() {
       const delta = (ts - lastTsRef.current) / 1000;
       lastTsRef.current = ts;
 
-      // Always read totalDuration from ref — never from closure
       const dur     = totalDurationRef.current;
       const newTime = Math.min(currentTimeRef.current + delta, dur);
       currentTimeRef.current = newTime;
@@ -176,119 +126,63 @@ export default function App() {
       if (newTime < dur) {
         rafRef.current = requestAnimationFrame(frame);
       } else {
-        setIsPlaying(false);
-        rafRef.current = null;
+        // টাইমলাইন শেষ হলে স্বয়ংক্রিয়ভাবে রেকর্ডিং স্টপ
+        handleTogglePlay();
       }
     }
-
     rafRef.current = requestAnimationFrame(frame);
-  // No deps on scenes/totalDuration — reads from refs inside frame()
   }, []);
 
-  const handleTogglePlay = useCallback(() => {
-    if (isPlaying) stopPreview();
-    else           startPreview();
-  }, [isPlaying, startPreview, stopPreview]);
 
-  const handleReset = useCallback(() => {
-    stopPreview();
-    setCurrentTime(0);
-    currentTimeRef.current = 0;
-    audioManagerRef.current.reset();
-  }, [stopPreview]);
+  // ── ৩. কানেক্টিং লেয়ার: রেকর্ডিং হুক ইনিশিয়েলাইজেশন ────────────────────────
+  const { startRecording, stopRecording } = useScreenRecorder({
+    onStart: startPreview,
+    onStop: stopPreview
+  });
 
-  const handleSeek = useCallback((ratio) => {
-    const t = ratio * totalDurationRef.current;
-    setCurrentTime(t);
-    currentTimeRef.current = t;
-    audioManagerRef.current.markPlayedUpTo(t, scenesRef.current);
-  }, []);
 
-  // Keyboard shortcuts: Space = play/pause, R = reset, E = export
+  // প্লে/পজ বাটন হ্যান্ডলার
+const handleTogglePlay = useCallback(async () => {
+    if (isPlaying) {
+      stopRecording();
+    } else {
+      try {
+        // 🎯 ফিক্স: রেকর্ড শুরু করার আগেই পুরো ক্যানভাস কন্টেইনারকে ব্রাউজারে ফুলস্ক্রিন করা হচ্ছে
+        const containerEl = document.querySelector('#canvas-clip-container');
+        if (containerEl && typeof containerEl.requestFullscreen === 'function') {
+          await containerEl.requestFullscreen();
+          // ফুলস্ক্রিন রেন্ডার হওয়ার জন্য সামান্য ১০ মিলিজেকেন্ড বিরতি
+          await new Promise((r) => setTimeout(r, 10)); 
+        }
+
+        // রেকর্ডার স্টার্ট
+        await startRecording();
+
+      } catch (error) {
+        console.error("Recording initialization failed:", error);
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+      }
+    }
+  }, [isPlaying, startRecording, stopRecording]);
+
+
+  // স্পেসবার লিসেনার (শুধু প্লে/পজ এর জন্য)
   useEffect(() => {
     function onKey(e) {
       if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
-      if (e.code === 'Space') { e.preventDefault(); handleTogglePlay(); }
-      if (e.code === 'KeyR')  { e.preventDefault(); handleReset(); }
+      if (e.code === 'Space') { 
+        e.preventDefault(); 
+        handleTogglePlay(); 
+      }
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [handleTogglePlay, handleReset]);
+  }, [handleTogglePlay]);
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // EXPORT
-  // ─────────────────────────────────────────────────────────────────────────
-  const appendLog = useCallback((msg) => {
-    setExportLog((prev) => [...prev.slice(-400), msg]);
-  }, []);
 
-  const handleExport = useCallback(async () => {
-    if (!('showDirectoryPicker' in window)) {
-      alert('File System Access API not supported.\nUse Chrome 86+ or Edge 86+ on desktop.');
-      return;
-    }
 
-    stopPreview();
-
-    let dirHandle;
-    try {
-      dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-    } catch (e) {
-      if (e.name === 'AbortError') return;
-      appendLog(`[ERROR] ${e.message}`);
-      return;
-    }
-
-    setIsExporting(true);
-    isExportingRef.current = true;
-    cancelExportRef.current = false;
-    setExportLog([]);
-    setExportProgress(0);
-    setExportResult(null);
-
-    const canvasEl = canvasRef.current;
-    if (!canvasEl) {
-      appendLog('[ERROR] Canvas not mounted.');
-      setIsExporting(false);
-      isExportingRef.current = false;
-      return;
-    }
-
-    const { framesWritten } = await runExport({
-      dirHandle,
-      canvasEl,
-      totalDuration: totalDurationRef.current,
-      scenes:        scenesRef.current,
-      setCurrentTime: (t) => {
-        currentTimeRef.current = t;
-        setCurrentTime(t);
-      },
-      onProgress: (pct) => setExportProgress(pct),
-      onLog:      appendLog,
-      cancelRef:  cancelExportRef,
-    });
-
-    setIsExporting(false);
-    isExportingRef.current = false;
-    setExportProgress(0);
-
-    // Reset timeline display
-    setCurrentTime(0);
-    currentTimeRef.current = 0;
-
-    // Show completion modal only if not cancelled
-    if (framesWritten > 0) {
-      setExportResult({ folderName: dirHandle.name, framesWritten });
-    }
-  }, [totalDuration, scenes, stopPreview, appendLog]);
-
-  const handleCancelExport = useCallback(() => {
-    cancelExportRef.current = true;
-  }, []);
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div
       style={{
@@ -309,31 +203,14 @@ export default function App() {
         canvasRef={canvasRef}
       />
 
-      {/* ── Floating icon controls (bottom-centre over canvas) ── */}
-      <FloatingControls
-        isPlaying={isPlaying}
-        isExporting={isExporting}
-        currentTime={currentTime}
-        totalDuration={totalDuration}
-        exportProgress={exportProgress}
-        onTogglePlay={handleTogglePlay}
-        onReset={handleReset}
-        onExport={handleExport}
-        onCancelExport={handleCancelExport}
-        onSeek={handleSeek}
-      />
-
-      {/* ── Export-done modal (shown after successful export) ── */}
-      {exportResult && (
-        <ExportDoneModal
-          audioFiles={audioFiles}
-          totalDuration={totalDuration}
-          exportLog={exportLog}
-          folderName={exportResult.folderName}
-          framesWritten={exportResult.framesWritten}
-          onClose={() => setExportResult(null)}
-        />
-      )}
+      {/* ── ছোট্ট পুচকি প্লে/পজ বাটন (CSS ক্লাস দিয়ে) ── */}
+      <button
+        onClick={handleTogglePlay}
+        className={`mini-control-btn ${isPlaying ? 'recording' : 'ready'}`}
+        title={isPlaying ? 'Pause (Space)' : 'Play & Record (Space)'}
+      >
+        {isPlaying ? '⏸' : '▶'}
+      </button>
     </div>
   );
 }

@@ -51,6 +51,7 @@ export default function MasterCanvas({ activeScene, currentTime, canvasRef }) {
     /* Outer clip container — exactly the scaled size */
     <div
       ref={wrapperRef}
+      id="canvas-clip-container"
       style={{
         width:        `${displayW}px`,
         height:       `${displayH}px`,
@@ -58,9 +59,9 @@ export default function MasterCanvas({ activeScene, currentTime, canvasRef }) {
         position:     'relative',
         flexShrink:   0,
         borderRadius: '8px',
-        border:       '1px solid #1e1e3a',
-        background:   '#fff',
-        boxShadow:    '0 0 0 1px #12122a, 0 8px 48px rgba(0,0,0,0.7)',
+        border:       '1px solid #000',
+        background:   '#000000',
+        boxShadow:    '0 0 0 1px #000, 0 8px 48px rgba(0,0,0,1)',
       }}
     >
       {/* Inner 1920×1080 surface — CSS-scaled down for display */}
