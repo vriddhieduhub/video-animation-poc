@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { animProgress, easeOutCubic, easeInOutQuad, handWobble } from '../engine/mathUtils.js';
+import { animProgress, easeOutCubic, easeInOutQuad, clamp, handWobble } from '../engine/mathUtils.js';
 import {
   HAND_PHYSICS,
   NIB_OFFSET,
@@ -36,19 +36,22 @@ export default function UnderlineRenderer({ element, seqStartTime, currentTime, 
 
   // Pass eased*100 as a pseudo-charIndex so the underline hand has
   // the same stroke-rhythm as the text renderers
-  const { wobbleX, wobbleY } = handWobble(
+  const { wobbleY } = handWobble(
     frameRef.current, HAND_PHYSICS, isAnimating, eased * 100, '',
   );
 
-  // Taper the wobble to zero over the last stretch of the stroke. easeOutCubic
-  // flattens the pen's forward speed near the end, so the constant frame-based
-  // tremor/jitter would otherwise show up as violent shaking in place. Fading
-  // the wobble out lets the hand glide to a smooth stop at the end.
-  const settle = rawProgress < 0.75
-    ? 1
-    : 1 - easeInOutQuad((rawProgress - 0.75) / 0.25);
+  // easeOutCubic makes the pen's forward speed drop to ~0 near the end. If the
+  // hand kept its organic wobble there, the horizontal drift would exceed the
+  // (tiny) forward motion and the hand would jitter back-and-forth in place —
+  // the "violent shaking" at the end of the underline.
+  //
+  // Fix: keep the horizontal position strictly monotonic (no X wobble at all,
+  // so the pen only ever moves forward along the line) and fade the vertical
+  // wobble fully out before the pen reaches its flat tail, so it glides to a
+  // smooth, still stop.
+  const settle = 1 - easeInOutQuad(clamp((rawProgress - 0.5) / 0.35, 0, 1));
 
-  const handX = left + currentLineWidth + NIB_OFFSET.underline.x + wobbleX * settle;
+  const handX = left + currentLineWidth + NIB_OFFSET.underline.x;
   const handY = top + NIB_OFFSET.underline.y + wobbleY * settle;
 
   return (
