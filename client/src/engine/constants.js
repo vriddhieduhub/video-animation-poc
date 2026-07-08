@@ -72,6 +72,24 @@ export const ANIMATION_CONFIG = {
       offsetY: 15,
     },
   },
+  table: {
+    speed: {
+      framesPerCharacter: 4,
+      minDuration: 5.0,
+      maxDuration: 32.0,
+      // Fraction of the total animation spent drawing the empty grid/borders
+      // before any cell content starts being written.
+      gridDrawRatio: 0.12,
+    },
+    hand: {
+      waveAmplitude: 8,
+      waveFrequency: 0.34,
+      microNoise: 0.6,
+      arcAmplitude: 6,
+      offsetX: -45,
+      offsetYRatio: 0.55,
+    },
+  },
   eraser: {
     speed: {
       durationInFrames: 90,
@@ -92,6 +110,7 @@ export const TYPING_SPEED = {
   paragraph: ANIMATION_CONFIG.paragraph.speed,
   underline: ANIMATION_CONFIG.underline.speed,
   image: ANIMATION_CONFIG.image.speed,
+  table: ANIMATION_CONFIG.table.speed,
 };
 
 // পুরোনো renderer/math utils compatibility রাখার জন্য এই object রাখা হয়েছে।

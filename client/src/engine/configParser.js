@@ -9,7 +9,7 @@ import { BASE_SEQ_DURATION, TYPING_SPEED, FPS, ANIMATION_CONFIG } from './consta
  * type and content length — exactly the framesPerCharacter approach from
  * the POC's whiteboard.config.js getAnimationFrames().
  *
- * @param {'heading'|'paragraph'|'underline'|'image'|'eraser'|'divider'} type
+ * @param {'heading'|'paragraph'|'underline'|'image'|'eraser'|'divider'|'table'} type
  * @param {string} content   - text content (HTML stripped) or image src
  * @param {string} rawClasses
  * @returns {number} seconds
@@ -45,6 +45,14 @@ function computeAnimDuration(type, content, rawClasses) {
       );
       return Math.min(frames, cfg.maxDuration * FPS) / FPS;
     }
+    case 'table': {
+      const cfg = TYPING_SPEED.table;
+      const frames = Math.max(
+        cfg.minDuration * FPS,
+        plainLen * cfg.framesPerCharacter,
+      );
+      return Math.min(frames, cfg.maxDuration * FPS) / FPS;
+    }
     case 'image':
       return TYPING_SPEED.image.fixedDuration;
     case 'eraser':
@@ -57,7 +65,7 @@ function computeAnimDuration(type, content, rawClasses) {
 /**
  * @typedef {Object} SceneElement
  * @property {string} seqId
- * @property {'heading'|'paragraph'|'underline'|'image'|'eraser'|'divider'} type
+ * @property {'heading'|'paragraph'|'underline'|'image'|'eraser'|'divider'|'table'} type
  * @property {string} content      - text content or image src
  * @property {string} rawClasses   - space-separated class string from the tag
  * @property {string} tag          - original HTML tag name
@@ -152,6 +160,9 @@ export function parseConfig(htmlString) {
       } else if (tag === 'img') {
         type    = 'image';
         content = child.getAttribute('src') || '';
+      } else if (tag === 'table') {
+        type    = 'table';
+        content = child.innerHTML.trim(); // keep full thead/tbody/tr/th/td markup
       }
 
       const animDuration = computeAnimDuration(type, content, rawClasses);

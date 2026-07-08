@@ -5,6 +5,7 @@ import ParagraphRenderer from '../renderers/ParagraphRenderer.jsx';
 import ImageRenderer     from '../renderers/ImageRenderer.jsx';
 import UnderlineRenderer from '../renderers/UnderlineRenderer.jsx';
 import EraserRenderer    from '../renderers/EraserRenderer.jsx';
+import TableRenderer     from '../renderers/TableRenderer.jsx';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLASS → PIXEL EXTRACTORS
@@ -220,6 +221,14 @@ export default function SceneRenderer({ scene, currentTime }) {
             )}
             {el.type === 'image' && (
               <ImageRenderer
+                element={el}
+                seqStartTime={seqStart}
+                currentTime={currentTime}
+                layout={sharedLayout}
+              />
+            )}
+            {el.type === 'table' && (
+              <TableRenderer
                 element={el}
                 seqStartTime={seqStart}
                 currentTime={currentTime}
