@@ -8,6 +8,7 @@ import React, {
 
 import { parseConfig, applyAudioDurations } from './engine/configParser.js';
 import { AudioManager }  from './engine/audioManager.js';
+import { RECORDING }     from './engine/constants.js';
 import MasterCanvas      from './components/MasterCanvas.jsx';
 
 // ── নতুন কাস্টম হুক ইমপোর্ট ──────────────────────────────────────────────────
@@ -57,6 +58,10 @@ export default function App() {
   const currentTimeRef   = useRef(0);
   const canvasRef        = useRef(null);
   const audioManagerRef  = useRef(new AudioManager());
+
+  // টাইমলাইন শেষ হলে কোন লজিকে থামবে তা সবসময় সর্বশেষ ভার্সন থেকে ধরার জন্য ref।
+  // (এতে raf লুপের ভিতরে পুরোনো/stale ক্লোজার কল হওয়ার বাগ এড়ানো যায়)
+  const autoStopRef      = useRef(() => {});
 
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
 
@@ -126,8 +131,10 @@ export default function App() {
       if (newTime < dur) {
         rafRef.current = requestAnimationFrame(frame);
       } else {
-        // টাইমলাইন শেষ হলে স্বয়ংক্রিয়ভাবে রেকর্ডিং স্টপ
-        handleTogglePlay();
+        // timeline end -> auto stop (recording stop / animation stop).
+        // always call latest handler via ref so a stale isPlaying closure
+        // does not accidentally re-start recording (scene-04 auto-stop fix).
+        autoStopRef.current();
       }
     }
     rafRef.current = requestAnimationFrame(frame);
@@ -141,31 +148,52 @@ export default function App() {
   });
 
 
-  // প্লে/পজ বাটন হ্যান্ডলার
-const handleTogglePlay = useCallback(async () => {
+  // play/pause button handler
+  const handleTogglePlay = useCallback(async () => {
     if (isPlaying) {
-      stopRecording();
-    } else {
-      try {
-        // 🎯 ফিক্স: রেকর্ড শুরু করার আগেই পুরো ক্যানভাস কন্টেইনারকে ব্রাউজারে ফুলস্ক্রিন করা হচ্ছে
-        const containerEl = document.querySelector('#canvas-clip-container');
-        if (containerEl && typeof containerEl.requestFullscreen === 'function') {
-          await containerEl.requestFullscreen();
-          // ফুলস্ক্রিন রেন্ডার হওয়ার জন্য সামান্য ১০ মিলিজেকেন্ড বিরতি
-          await new Promise((r) => setTimeout(r, 10)); 
-        }
+      // stop: if recording is on, stop the recorder; otherwise stop the animation.
+      if (RECORDING) {
+        stopRecording();
+      } else {
+        stopPreview();
+      }
+      return;
+    }
 
-        // রেকর্ডার স্টার্ট
-        await startRecording();
+    // RECORDING=false -> no recording prompt, animation starts directly.
+    if (!RECORDING) {
+      startPreview();
+      return;
+    }
 
-      } catch (error) {
-        console.error("Recording initialization failed:", error);
-        if (document.fullscreenElement) {
-          document.exitFullscreen().catch(() => {});
-        }
+    try {
+      // fullscreen the whole canvas container before recording starts
+      const containerEl = document.querySelector('#canvas-clip-container');
+      if (containerEl && typeof containerEl.requestFullscreen === 'function') {
+        await containerEl.requestFullscreen();
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      await startRecording();
+
+    } catch (error) {
+      console.error("Recording initialization failed:", error);
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
       }
     }
-  }, [isPlaying, startRecording, stopRecording]);
+  }, [isPlaying, startRecording, stopRecording, startPreview, stopPreview]);
+
+  // keep the timeline-end auto-stop handler pointing at the latest logic.
+  useEffect(() => {
+    autoStopRef.current = () => {
+      if (RECORDING) {
+        stopRecording();
+      } else {
+        stopPreview();
+      }
+    };
+  }, [stopRecording, stopPreview]);
 
 
   // স্পেসবার লিসেনার (শুধু প্লে/পজ এর জন্য)
@@ -207,7 +235,13 @@ const handleTogglePlay = useCallback(async () => {
       <button
         onClick={handleTogglePlay}
         className={`mini-control-btn ${isPlaying ? 'recording' : 'ready'}`}
-        title={isPlaying ? 'Pause (Space)' : 'Play & Record (Space)'}
+        title={
+          isPlaying
+            ? 'Pause (Space)'
+            : RECORDING
+              ? 'Play & Record (Space)'
+              : 'Play (Space)'
+        }
       >
         {isPlaying ? '⏸' : '▶'}
       </button>
